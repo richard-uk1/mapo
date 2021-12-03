@@ -1,0 +1,19 @@
+[package]
+name = "mapo"
+description = "A(nother) graph drawing library"
+version = "0.1.0"
+authors = ["Richard Dodd <richard.o.dodd@gmail.com>"]
+edition = "2021"
+license = "MIT/Apache-2.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+itertools = "0.9.0"
+to_precision = "0.1.1"
+#piet = { path = "../contrib/piet/piet" }
+
+[dev-dependencies]
+anyhow = "1.0.28"
+csv = "1.1.3"
+
