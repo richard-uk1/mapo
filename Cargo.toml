@@ -11,7 +11,7 @@ license = "MIT/Apache-2.0"
 [dependencies]
 itertools = "0.9.0"
 to_precision = "0.1.1"
-#piet = { path = "../contrib/piet/piet" }
+piet = { path = "../../contrib/piet/piet" }
 
 [dev-dependencies]
 anyhow = "1.0.28"

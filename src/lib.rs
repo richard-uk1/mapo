@@ -2,18 +2,18 @@
 #![feature(generic_associated_types)]
 
 //use druid::{kurbo::Rect, Color, Insets};
-use piet::{
+/*use piet::{
     kurbo::{Insets, Rect},
     Color,
-};
+};*/
 
-//mod axes;
+pub mod axis;
 //mod box_plot;
 //mod histogram;
 //mod line_chart;
 //mod pie_chart;
-mod range;
-mod sequence;
+pub mod range;
+pub mod sequence;
 //pub mod theme;
 
 pub use crate::{
