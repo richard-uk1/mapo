@@ -1,5 +1,7 @@
 //! Piet charts
 #![feature(generic_associated_types)]
+#![feature(type_alias_impl_trait)]
+#![feature(never_type)]
 
 //use druid::{kurbo::Rect, Color, Insets};
 /*use piet::{
@@ -8,18 +10,21 @@
 };*/
 
 pub mod axis;
+pub mod ticker;
 //mod box_plot;
 //mod histogram;
 //mod line_chart;
 //mod pie_chart;
 pub mod range;
 pub mod sequence;
-//pub mod theme;
+pub mod theme;
 
 pub use crate::{
     range::Range,
     sequence::{Categorical, Numeric, Sequence},
 };
+
+pub type ArcStr = std::sync::Arc<str>;
 /*
     box_plot::{BoxPlot, BoxPlotData, BoxPlotDataLens, BoxPlotDataLensBuilder},
     histogram::{Histogram, HistogramData, HistogramDataLens, HistogramDataLensBuilder},

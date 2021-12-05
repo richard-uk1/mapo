@@ -1,19 +1,29 @@
 use crate::Range;
-use std::{borrow::Cow, fmt, sync::Arc};
+use std::{borrow::Cow, fmt, mem, sync::Arc};
+
+/// Because we layout all labels, we should have some cap for when there are so many it will affect perf.
+/// The number should be high enough that you couldn't possibly want more.
+const MAX_LABELS: usize = 100;
 
 /// The discrete analogue of `Ranged`.
 pub trait Sequence {
-    type Display<'a>: fmt::Display
+    type Item<'a>
+    where
+        Self: 'a;
+    type Iter<'a>: Iterator<Item = Self::Item<'a>> + 'a
     where
         Self: 'a;
 
     /// The number of items in the sequence.
     fn len(&self) -> usize;
 
-    /// How you want to format the value at `idx`.
+    /// The value of the sequence at `idx`.
     ///
     /// This function should always return `Some` if `idx` < `self.len()`
-    fn display(&self, idx: usize) -> Option<Self::Display<'_>>;
+    fn get(&self, idx: usize) -> Option<Self::Item<'_>>;
+
+    /// Returns an iterator over the values.
+    fn iter(&self) -> Self::Iter<'_>;
 }
 
 /// A numeric sequence
@@ -69,14 +79,15 @@ impl Numeric {
 }
 
 impl Sequence for Numeric {
-    type Display<'a> = f64;
+    type Item<'a> = f64;
+    type Iter<'a> = impl Iterator<Item = Self::Item<'a>> + 'a;
 
     fn len(&self) -> usize {
         // ignoring overflow for now
         ((self.range.max() - self.range.min()) / self.step).floor() as usize
     }
 
-    fn display(&self, idx: usize) -> Option<Self::Display<'_>> {
+    fn get(&self, idx: usize) -> Option<Self::Item<'_>> {
         let val = self.range.min() + idx as f64 * self.step;
         if val > self.range.max() {
             None
@@ -84,51 +95,81 @@ impl Sequence for Numeric {
             Some(val)
         }
     }
-}
 
-#[derive(Clone)]
-pub struct Categorical<'a, T: Clone> {
-    categories: Cow<'a, [T]>,
-    display: Arc<dyn Fn(&T, &mut fmt::Formatter) -> fmt::Result>,
-}
-
-impl<T: Clone + fmt::Debug> fmt::Debug for Categorical<'_, T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut d = f.debug_tuple("Categorical");
-        for field in &*self.categories {
-            d.field(field);
-        }
-        d.finish()
+    fn iter(&self) -> Self::Iter<'_> {
+        NumericIter::new(*self)
     }
 }
 
-// TODO make this type anonymous when we can `impl Trait` in trait signature.
-pub struct CategoricalDisplay<'a, T: Clone> {
-    inner: &'a Categorical<'a, T>,
-    idx: usize,
+struct NumericIter {
+    inner: Numeric,
+    next: f64,
 }
 
-impl<'a, T: Clone> fmt::Display for CategoricalDisplay<'a, T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        (self.inner.display)(&self.inner.categories[self.idx], f)
+impl NumericIter {
+    fn new(inner: Numeric) -> Self {
+        NumericIter {
+            inner,
+            next: inner.range.min(),
+        }
+    }
+}
+
+impl Iterator for NumericIter {
+    type Item = f64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next > self.inner.range.max() {
+            return None;
+        }
+        let out = self.next;
+        self.next += self.inner.step;
+        Some(out)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Categorical<'a, T: Clone> {
+    categories: Cow<'a, [T]>,
+}
+
+impl<'a, T: Clone> Categorical<'a, T> {
+    pub fn new(categories: impl Into<Cow<'a, [T]>>) -> Self {
+        Categorical {
+            categories: categories.into(),
+        }
+    }
+
+    /// Get the categories
+    pub fn categories(&self) -> &[T] {
+        &self.categories[..]
+    }
+
+    /// Sets the categories. Returns old value.
+    pub fn set_categories(&mut self, categories: impl Into<Cow<'a, [T]>>) -> Cow<'a, [T]> {
+        mem::replace(&mut self.categories, categories.into())
     }
 }
 
 impl<'a, T: Clone> Sequence for Categorical<'a, T> {
-    type Display<'b>
+    type Item<'b>
     where
         'a: 'b,
-    = CategoricalDisplay<'b, T>;
+    = &'b T;
+    type Iter<'b>
+    where
+        'a: 'b,
+    = impl Iterator<Item = Self::Item<'b>> + 'b;
 
     fn len(&self) -> usize {
         self.categories.len()
     }
 
-    fn display(&self, idx: usize) -> Option<Self::Display<'_>> {
-        if self.categories.get(idx).is_some() {
-            Some(CategoricalDisplay { inner: self, idx })
-        } else {
-            None
-        }
+    fn get(&self, idx: usize) -> Option<Self::Item<'_>> {
+        self.categories.get(idx)
+    }
+
+    fn iter(&self) -> Self::Iter<'_> {
+        self.categories.iter()
     }
 }

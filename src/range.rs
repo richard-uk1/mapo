@@ -77,30 +77,38 @@ impl Range {
         self
     }
 
+    #[inline]
     pub fn size(&self) -> f64 {
         self.max - self.min
     }
 
     /// Extend the range to include `val`.
     ///
-    /// Returns `true` if the range changed.
-    ///
     /// # Panics
     ///
     /// Panics if `val` is not finite.
-    pub fn extend_to(&mut self, val: f64) -> bool {
+    #[inline]
+    pub fn extend_to(mut self, val: f64) -> Self {
         if !val.is_finite() {
             panic!("can only extend to a finite value");
         }
         if val < self.min {
             self.min = val;
-            true
         } else if val > self.max {
             self.max = val;
-            true
-        } else {
-            false
         }
+        self
+    }
+
+    /// Extend this range to include 0.
+    #[inline]
+    pub fn include_zero(self) -> Self {
+        self.extend_to(0.)
+    }
+
+    /// Extends the range to nice round numbers.
+    pub fn to_rounded(self) -> Self {
+        todo!()
     }
 
     /// Returns the smallest range that contains all the values in `iter`.
@@ -108,7 +116,7 @@ impl Range {
     /// # Panics
     ///
     /// This function will panic if the iterator is empty, or if any of the values are +∞ or -∞.
-    /// NaN values are ignored.
+    /// NaN values are skipped.
     pub fn from_iter<I>(iter: I) -> Self
     where
         I: IntoIterator<Item = f64>,

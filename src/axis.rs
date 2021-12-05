@@ -1,10 +1,17 @@
 // TODO implement toPrecision from javascript - it gives better results.
-use crate::{theme, Range};
-use piet::{
-    kurbo::{Line, Point, Rect},
-    PietText, RenderCtx, TextStorage,
+use crate::{
+    theme,
+    ticker::{Tick, Ticker},
+    ArcStr, Range, Sequence,
 };
-use std::fmt::{self, Display};
+use piet::{
+    kurbo::{Affine, Line, Point, Rect, Size},
+    Color, RenderContext, Text, TextAttribute, TextLayout, TextLayoutBuilder, TextStorage,
+};
+use std::{
+    fmt::{self, Display},
+    sync::Arc,
+};
 use to_precision::FloatExt as _;
 
 const SCALE_TICK_MARGIN: f64 = 5.;
@@ -17,108 +24,245 @@ const MIN_LABEL_WIDTH: f64 = 5.;
 /// This will affect the text direction of labels. You can use a `Direction::Left` axis vertically
 /// by rotating it 90 degress, if this gives you the effect you want.
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum Position {
-    Top,
-    Left,
-    Bottom,
-    Right,
+pub enum LabelPosition {
+    /// above or to the left
+    Before,
+    /// below or to the right
+    After,
 }
 
-impl Position {
-    /// How many labels can we fit. It's a guess
-    fn max_labels(self, bounds: Rect) -> usize {
-        match self {
-            Direction::X => (bounds.width() / 100.).floor() as usize + 1,
-            Direction::Y => (bounds.height() / 40.).floor() as usize + 1,
-        }
-    }
+// # Plan
+//
+// A scale has ticks and labels. The implementation of a scale will supply all the ticks and labels
+// (with the size in pixels as input). It will then be up to a wrapper to layout the labels and work
+// out how many we can fit (and where they should actually be displayed). For now labels will be
+// String only.
 
-    fn label_position(self, bounds: Rect, t: f64, size: Size, margin: f64) -> Point {
-        let p = self.position(bounds, t);
-        match self {
-            Direction::X => Point::new(p - 0.5 * size.width, bounds.y1 + SCALE_TICK_MARGIN),
-            Direction::Y => Point::new(
-                bounds.x0 - size.width - SCALE_TICK_MARGIN,
-                p - 0.5 * size.height,
-            ),
-        }
-    }
-
-    fn position(self, bounds: Rect, t: f64) -> f64 {
-        match self {
-            Direction::X => bounds.x0 + t * bounds.width(),
-            Direction::Y => bounds.y1 - t * bounds.height(),
-        }
-    }
-
-    fn axis_line(self, Rect { x0, y0, x1, y1 }: Rect) -> Line {
-        match self {
-            Direction::X => Line::new((x0, y1), (x1, y1)),
-            Direction::Y => Line::new((x0, y0), (x0, y1)),
-        }
-    }
+/// Axes must be drawn either vertically or horizontally.
+#[derive(Debug, Clone, Copy)]
+pub enum Direction {
+    Vertical,
+    Horizontal,
 }
 
 /// A struct for retaining text layout information for an axis scale.
 ///
+/// This struct knows everything it needs to draw the axis, ticks, and labels.
+///
 /// [matplotlib ticker](https://github.com/matplotlib/matplotlib/blob/master/lib/matplotlib/ticker.py#L2057)
 /// is a good resource.
-#[derive(Debug, Clone)]
-pub struct Scale {
-    pos: Position,
-    /// (min, max) the range of the data we are graphing. Can overspill if you want gaps at the
-    /// top/bottom, or include 0 if you want.
-    data_range: Range,
-    /// The graph area
-    graph_bounds: Rect,
-    /// Axis/mark color
-    axis_color: KeyOrValue<Color>,
+#[derive(Clone)]
+pub struct Axis<T, RC: RenderContext> {
+    /// Whether the axis is vertical or horizontal.
+    direction: Direction,
+    /// Where the labels should be shown. Ticks will be drawn on the opposite side.
+    label_pos: LabelPosition,
+    /// How long the axis will be
+    axis_len: f64,
+    /// An object that knows where the ticks should be drawn.
+    ticker: T,
+
+    // style
+
+    // /// Axis/mark color
+    // axis_color: Color,
+
     // retained
-    /// Our computed scale. The length is the computed number of scale ticks we should show. Format
-    /// is `(data value, y-coordinate of the tick)`
-    scale_ticker: Option<ContTicker>,
     /// Our computed text layouts for the tick labels.
-    layouts: Option<Vec<PositionedLayout<ArcStr>>>,
-    /// The max size of the layouts.
-    max_layout: Option<Size>,
+    ///
+    /// This is cached, and invalidated by clearing the vec. This way we
+    /// can re-use the allocation. To see if cache is valid, check its
+    /// length against `ticker.len()`.
+    label_layouts: Vec<<RC as RenderContext>::TextLayout>,
+    /// Which of the layouts we are actually going to draw.
+    labels_to_draw: Vec<usize>,
 }
 
-impl Scale {
-    /// Create a new scale object.
-    ///
-    ///  - `data_range` is the range of the data, from lowest to highest.
-    ///  - `graph_bounds` is the rectangle where the graph will be drawn. We will draw outside this
-    ///    area a bit.
-    pub fn new(data_range: impl Into<Range>, direction: Direction) -> Self {
-        Scale {
+impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
+    /// Create a new axis.
+    pub fn new(direction: Direction, label_pos: LabelPosition, axis_len: f64, ticker: T) -> Self {
+        assert!(axis_len >= 0.);
+        Self {
             direction,
-            data_range: data_range.into(),
-            graph_bounds: Rect::ZERO,
-            axis_color: theme::AXES_COLOR.into(),
-            scale_ticker: None,
-            layouts: None,
-            max_layout: None,
+            label_pos,
+            axis_len,
+            ticker,
+            label_layouts: vec![],
+            labels_to_draw: vec![],
         }
     }
 
-    pub fn new_y(data_range: impl Into<Range>) -> Self {
-        Self::new(data_range, Direction::Y)
+    pub fn set_ticker(mut self, new_ticker: T) -> Axis<T, RC> {
+        self.label_layouts.clear();
+        Axis {
+            direction: self.direction,
+            label_pos: self.label_pos,
+            axis_len: self.axis_len,
+            ticker: new_ticker,
+            label_layouts: self.label_layouts,
+            labels_to_draw: self.labels_to_draw,
+        }
     }
 
-    pub fn new_x(data_range: impl Into<Range>) -> Self {
-        Self::new(data_range, Direction::X)
+    // Call this before draw.
+    pub fn layout(&mut self, ctx: &mut RC) -> Result<(), piet::Error> {
+        self.build_layouts(ctx)?;
+        self.fit_labels();
+        Ok(())
     }
 
+    /// Draw the layout
+    pub fn draw(&self, pos: Point, ctx: &mut RC) {
+        if self.label_layouts.is_empty() && self.ticker.len(self.axis_len) != 0 {
+            panic!("Must call `layout` before `draw`");
+        }
+        ctx.with_save(|ctx| {
+            ctx.transform(Affine::translate(pos.to_vec2()));
+            // axis line (extend to contain tick at edge)
+            let axis_line = match self.direction {
+                Direction::Horizontal => Line::new((-1., 0.), (self.axis_len + 1., 0.)),
+                Direction::Vertical => Line::new((0., -1.), (0., self.axis_len + 1.)),
+            };
+            ctx.stroke(axis_line, &Color::BLACK, 2.);
+
+            // ticks
+            for tick in self.ticker.ticks(self.axis_len) {
+                let tick_line = match (self.direction, self.label_pos) {
+                    (Direction::Vertical, LabelPosition::Before) => {
+                        // right
+                        Line::new((0., tick.pos), (5., tick.pos))
+                    }
+                    (Direction::Vertical, LabelPosition::After) => {
+                        // left
+                        Line::new((0., tick.pos), (-5., tick.pos))
+                    }
+                    (Direction::Horizontal, LabelPosition::Before) => {
+                        // below
+                        Line::new((tick.pos, 0.), (tick.pos, 5.))
+                    }
+                    (Direction::Horizontal, LabelPosition::After) => {
+                        // above
+                        Line::new((tick.pos, 0.), (tick.pos, -5.))
+                    }
+                };
+                ctx.stroke(tick_line, &Color::grey8(80), 1.);
+            }
+
+            // labels
+            for idx in self.labels_to_draw.iter().copied() {
+                let layout = &self.label_layouts[idx];
+                let tick = self.ticks().nth(idx).unwrap();
+                let pos = match (self.direction, self.label_pos) {
+                    (Direction::Vertical, LabelPosition::Before) => {
+                        // left
+                        Point::new(
+                            -layout.size().width - 5.,
+                            tick.pos - layout.size().height * 0.5,
+                        )
+                    }
+                    (Direction::Vertical, LabelPosition::After) => {
+                        // right
+                        todo!()
+                    }
+                    (Direction::Horizontal, LabelPosition::Before) => {
+                        // above
+                        todo!()
+                    }
+                    (Direction::Horizontal, LabelPosition::After) => {
+                        // below
+                        Point::new(tick.pos - layout.size().width * 0.5, 5.)
+                    }
+                };
+                ctx.draw_text(layout, pos);
+            }
+            Ok(())
+        })
+        .unwrap()
+    }
+
+    fn build_layouts(&mut self, ctx: &mut RC) -> Result<(), piet::Error> {
+        if !self.label_layouts.is_empty() || self.ticker.len(self.axis_len) == 0 {
+            // nothing to do
+            return Ok(());
+        }
+        let text = ctx.text();
+        for tick in self.ticker.ticks(self.axis_len) {
+            let layout = text
+                .new_text_layout(tick.label)
+                .default_attribute(TextAttribute::FontSize(12.))
+                .build()?;
+
+            self.label_layouts.push(layout);
+        }
+        Ok(())
+    }
+
+    /// This function needs to be called every time anything affecting label
+    /// positioning changes.
+    fn fit_labels(&mut self) {
+        // Start by trying to fit in all labels, then keep missing more out until
+        // they will fit
+        let mut step = 1;
+        // the loop will never run iff `self.label_layouts.len() == 0`. The below
+        // divides by 2, rounding up.
+        while step <= (self.label_layouts.len() + 1) / 2 {
+            self.labels_to_draw.clear();
+            // TODO if the remainder is odd, put the gap in the middle, if even, split
+            // it between the ends.
+            self.labels_to_draw
+                .extend((0..self.label_layouts.len()).step_by(step));
+            if self.test_layouts_fit() {
+                return;
+            }
+            step += 1;
+        }
+        // If we can't layout anything, then show nothing.
+        self.labels_to_draw.clear();
+    }
+
+    /// Returns `true` if all the labels selected for drawing will fit without overlapping
+    /// each other.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the label layouts have not been built.
+    fn test_layouts_fit(&self) -> bool {
+        let mut prev_end = f64::NEG_INFINITY;
+        match self.direction {
+            Direction::Vertical => {
+                for idx in self.labels_to_draw.iter().copied() {
+                    let layout = &self.label_layouts[idx];
+                    let size = layout.size();
+                    let tick = self.ticks().nth(idx).unwrap();
+                    if prev_end >= tick.pos - size.height * 0.5 {
+                        return false;
+                    }
+                    prev_end = tick.pos + size.height * 0.5;
+                }
+            }
+            Direction::Horizontal => {
+                for idx in self.labels_to_draw.iter().copied() {
+                    let layout = &self.label_layouts[idx];
+                    let size = layout.size();
+                    let tick = self.ticks().nth(idx).unwrap();
+                    if prev_end >= tick.pos - size.width * 0.5 {
+                        return false;
+                    }
+                    prev_end = tick.pos + size.width * 0.5;
+                }
+            }
+        }
+        true
+    }
+
+    fn ticks(&self) -> impl Iterator<Item = Tick> + '_ {
+        self.ticker.ticks(self.axis_len)
+    }
+
+    /*
     pub fn set_direction(&mut self, d: Direction) {
         if self.direction != d {
             self.direction = d;
-            self.invalidate();
-        }
-    }
-
-    /// Helper function to make sure the range includes 0.
-    pub fn include_zero(&mut self) {
-        if self.data_range.extend_to(0.) {
             self.invalidate();
         }
     }
@@ -242,6 +386,32 @@ impl Scale {
         let t = (v - min) / (max - min);
         self.direction.position(self.graph_bounds(), t)
     }
+    */
+}
+
+/*
+#[derive(Clone)]
+pub enum SeriesKind<S = !> {
+    Range(Range),
+    Sequence(S),
+}
+
+impl SeriesKind {
+    fn from_range(range: Range) -> Self {
+        Self::Range (range,
+            fmt: Arc::new(|v, f| write!(f, "{:.4}", v)),
+        }
+    }
+}
+
+impl<S> SeriesKind<S> {
+    fn from_sequence(sequence: S) -> Self {
+        Self::Sequence { inner: sequence }
+    }
+}
+
+impl<S: Sequence> SeriesKind<S> {
+    fn test() {}
 }
 
 #[derive(Debug, Clone)]
@@ -545,3 +715,4 @@ fn test_count_ticks() {
         assert_eq!(count_ticks(r, step), count_ticks_slow(r, step));
     }
 }
+*/
