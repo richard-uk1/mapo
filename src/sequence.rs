@@ -1,3 +1,4 @@
+use crate::ticker::{Tick, Ticker};
 use crate::Range;
 use std::{borrow::Cow, fmt, mem, sync::Arc};
 
@@ -129,12 +130,12 @@ impl Iterator for NumericIter {
 }
 
 #[derive(Debug, Clone)]
-pub struct Categorical<'a, T: Clone> {
-    categories: Cow<'a, [T]>,
+pub struct Categorical<T> {
+    categories: Arc<[T]>,
 }
 
-impl<'a, T: Clone> Categorical<'a, T> {
-    pub fn new(categories: impl Into<Cow<'a, [T]>>) -> Self {
+impl<T> Categorical<T> {
+    pub fn new(categories: impl Into<Arc<[T]>>) -> Self {
         Categorical {
             categories: categories.into(),
         }
@@ -146,20 +147,21 @@ impl<'a, T: Clone> Categorical<'a, T> {
     }
 
     /// Sets the categories. Returns old value.
-    pub fn set_categories(&mut self, categories: impl Into<Cow<'a, [T]>>) -> Cow<'a, [T]> {
-        mem::replace(&mut self.categories, categories.into())
+    pub fn set_categories(&mut self, categories: impl Into<Arc<[T]>>) -> &mut Self {
+        self.categories = categories.into();
+        self
     }
 }
 
-impl<'a, T: Clone> Sequence for Categorical<'a, T> {
-    type Item<'b>
+impl<T> Sequence for Categorical<T> {
+    type Item<'a>
     where
-        'a: 'b,
-    = &'b T;
-    type Iter<'b>
+        T: 'a,
+    = &'a T;
+    type Iter<'a>
     where
-        'a: 'b,
-    = impl Iterator<Item = Self::Item<'b>> + 'b;
+        T: 'a,
+    = impl Iterator<Item = Self::Item<'a>> + 'a;
 
     fn len(&self) -> usize {
         self.categories.len()
@@ -171,5 +173,72 @@ impl<'a, T: Clone> Sequence for Categorical<'a, T> {
 
     fn iter(&self) -> Self::Iter<'_> {
         self.categories.iter()
+    }
+}
+
+impl<T> From<Arc<[T]>> for Categorical<T> {
+    fn from(f: Arc<[T]>) -> Self {
+        Self::new(f)
+    }
+}
+
+impl<T> From<Vec<T>> for Categorical<T> {
+    fn from(f: Vec<T>) -> Self {
+        Self::new(Arc::from(f))
+    }
+}
+
+impl<T> From<Box<[T]>> for Categorical<T> {
+    fn from(f: Box<[T]>) -> Self {
+        Self::new(Arc::from(f))
+    }
+}
+
+impl<T: Copy, const N: usize> From<[T; N]> for Categorical<T> {
+    fn from(f: [T; N]) -> Self {
+        let boxed_slice = Box::<[T]>::from(f.as_ref());
+        Self::new(Arc::from(boxed_slice))
+    }
+}
+
+/// Extension methods for `Sequence`.
+pub trait SequenceExt: Sequence {
+    /// Use when you want flex 'space-around' behavior (as opposed to 'space-bewteen' - the
+    /// default).
+    fn space_around(self) -> SpaceAround<Self>
+    where
+        Self: Sized;
+}
+
+impl<S: Sequence> SequenceExt for S {
+    fn space_around(self) -> SpaceAround<Self> {
+        SpaceAround(self)
+    }
+}
+
+pub struct SpaceAround<S>(S);
+
+impl<S> Ticker for SpaceAround<S>
+where
+    S: Sequence,
+    for<'a> S::Item<'a>: fmt::Display,
+{
+    type TickIter<'a>
+    where
+        Self: 'a,
+    = impl Iterator<Item = Tick>;
+
+    fn len(&self, _axis_len: f64) -> usize {
+        self.0.len()
+    }
+
+    fn ticks(&self, axis_len: f64) -> Self::TickIter<'_> {
+        // gap between labels. We'll get NaN when self.len() == 0, but it doesn't matter
+        // because the iterator will be empty
+        let gap = axis_len / self.0.len() as f64;
+        self.0.iter().enumerate().map(move |(idx, v)| Tick {
+            pos: (idx as f64 + 0.5) * gap,
+            label: v.to_string().into(),
+        })
     }
 }

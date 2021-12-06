@@ -1,104 +1,92 @@
-use druid::{
-    im::Vector,
-    kurbo::{Affine, Line, Point, Rect},
-    piet::PietText,
-    text::TextStorage,
-    ArcStr, BoxConstraints, Color, Data, Env, Event, EventCtx, KeyOrValue, LayoutCtx, LifeCycle,
-    LifeCycleCtx, PaintCtx, RenderContext, Size, TextLayout, UpdateCtx, Widget,
-};
-use druid_lens_compose::ComposeLens;
-use itertools::izip;
-use std::sync::Arc;
-
 use crate::{
-    axes::{calc_tick_spacing, Scale},
-    theme, GRAPH_INSETS,
+    axis::{Axis, Direction, LabelPosition},
+    range::Range,
+    sequence::Categorical,
+    theme,
 };
+use itertools::izip;
+use piet::{kurbo::Size, RenderContext};
+use std::{fmt, sync::Arc};
 
-/// A histogram of equal width categories
-#[derive(Debug, Clone, Data, ComposeLens)]
-pub struct HistogramData<Title, XLabel> {
-    pub title: Title,
-    pub x_axis_label: XLabel,
-    pub x_axis: Vector<ArcStr>,
-    pub counts: Vector<usize>,
+/// A histogram
+///
+/// # Type parameters
+///  - `CT`: a ticker of categories
+///  - `VT`: an (optional) ticker of values
+///  - `RC`: the piet render context. This is used to create text layouts.
+pub struct Histogram<C, RC: RenderContext> {
+    values: Arc<[f64]>,
+    /// for now always x axis
+    category_axis: Axis<Categorical<C>, RC>,
+    /// for now always y axis
+    value_axis: Axis<Range, RC>,
+    /// The size of the chart area. Does not include axis labels etc.
+    chart_size: Size,
+    /// The gap between barlines.
+    ///
+    /// Will be clamped to `(0, (bar_width - 5.))`, or `0` if that range is empty.
+    bar_spacing: f64,
 }
 
-pub struct Histogram<Title, XLabel> {
-    bar_spacing: KeyOrValue<f64>,
-    axis_color: KeyOrValue<Color>,
-    // retained state
-    title_layout: TextLayout<Title>,
-    x_label_layout: TextLayout<XLabel>,
-    x_axis_layouts: Option<Vec<TextLayout<ArcStr>>>,
-    y_scale: Option<Scale>,
-}
+impl<C: 'static + fmt::Display, RC: RenderContext> Histogram<C, RC> {
+    pub fn new(
+        chart_size: Size,
+        labels: impl Into<Categorical<C>>,
+        values: impl Into<Arc<[f64]>>,
+    ) -> Self {
+        let labels = labels.into();
+        let values = values.into();
+        let values_range = Range::from_iter(values.iter().copied()).include_zero();
+        let mut out = Histogram {
+            values,
+            category_axis: Axis::new(
+                Direction::Horizontal,
+                LabelPosition::After,
+                chart_size.width,
+                labels,
+            ),
+            value_axis: Axis::new(
+                Direction::Vertical,
+                LabelPosition::Before,
+                chart_size.height,
+                values_range,
+            ),
+            chart_size,
+            bar_spacing: 10.,
+        };
+        out.clamp_spacing();
+        out
+    }
 
-impl<Title, XLabel> Histogram<Title, XLabel>
-where
-    Title: TextStorage,
-    XLabel: TextStorage,
-{
-    pub fn new() -> Self {
-        let mut title_layout = TextLayout::new();
-        title_layout.set_text_size(20.);
-        Histogram {
-            bar_spacing: theme::BAR_SPACING.into(),
-            axis_color: theme::AXES_COLOR.into(),
-            title_layout,
-            x_label_layout: TextLayout::new(),
-            x_axis_layouts: None,
-            y_scale: None,
+    pub fn values(&self) -> &[f64] {
+        &self.values[..]
+    }
+
+    fn clamp_spacing(&mut self) {
+        let slot_width = self.bar_slot_width();
+        if self.bar_spacing > slot_width - 5. {
+            self.bar_spacing = slot_width - 5.;
+        }
+        if self.bar_spacing < 0. {
+            self.bar_spacing = 0.;
         }
     }
 
-    fn rebuild_if_needed(
-        &mut self,
-        text: &mut PietText,
-        data: &HistogramData<Title, XLabel>,
-        env: &Env,
-        size: Size,
-    ) {
-        let margin = env.get(theme::MARGIN);
-        let scale_margin = env.get(theme::SCALE_MARGIN);
-
-        self.title_layout.rebuild_if_needed(text, env);
-        self.x_label_layout.rebuild_if_needed(text, env);
-        if self.x_axis_layouts.is_none() {
-            self.x_axis_layouts = Some(
-                data.x_axis
-                    .iter()
-                    .cloned()
-                    .map(|label| {
-                        let mut layout = TextLayout::from_text(label);
-                        layout.rebuild_if_needed(text, env);
-                        layout
-                    })
-                    .collect(),
-            );
-        }
-        if self.y_scale.is_none() {
-            self.y_scale = Some(Scale::new_y((
-                0.,
-                data.counts.iter().copied().max().unwrap_or(0) as f64,
-            )))
-        }
-
-        let draw_area = size.to_rect();
-        let y_scale = self.y_scale.as_mut().unwrap();
-        y_scale.set_graph_bounds(draw_area);
-        y_scale.rebuild_if_needed(text, env);
-
-        let graph_bounds = self.graph_bounds(size);
-        let y_scale = self.y_scale.as_mut().unwrap();
-        y_scale.set_graph_bounds(graph_bounds);
-        y_scale.rebuild_if_needed(text, env);
+    fn bar_slot_width(&self) -> f64 {
+        self.chart_size.width / self.values.len() as f64
     }
 
-    fn graph_bounds(&self, size: Size) -> Rect {
-        Rect::from_origin_size(Point::ZERO, size).inset(GRAPH_INSETS)
+    pub fn layout(&mut self, rc: &mut RC) -> Result<(), piet::Error> {
+        self.category_axis.layout(rc)?;
+        self.value_axis.layout(rc)?;
+        Ok(())
+    }
+
+    pub fn draw(&self, rc: &mut RC) {
+        self.category_axis.draw((0., self.chart_size.height), rc);
     }
 }
+/*
 
 impl<Title, XLabel> Widget<HistogramData<Title, XLabel>> for Histogram<Title, XLabel>
 where
@@ -240,3 +228,4 @@ where
         self.y_scale.as_mut().unwrap().draw(ctx, env, true, true);
     }
 }
+*/

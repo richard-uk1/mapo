@@ -152,3 +152,63 @@ impl From<std::ops::Range<f64>> for Range {
         Self::new(range.start, range.end)
     }
 }
+
+// helpers
+
+/// Returns gap between each scale tick, in terms of the y variable, that gives closest to the
+/// requested `target_count` and is either 1, 2 or 5 ×10<sup>n</sup> for some n (hardcoded for now).
+pub fn calc_tick_spacing(range: Range, target_count: usize) -> f64 {
+    if target_count <= 1 || range.size() == 0. {
+        // We don't support a number of ticks less than 2.
+        return f64::NAN;
+    }
+    let too_many_10s = pow_10_just_too_many(range, target_count);
+    debug_assert!(
+        count_ticks_slow(range, too_many_10s) > target_count,
+        "count_ticks({:?}, {}) > {}",
+        range,
+        too_many_10s,
+        target_count
+    );
+    debug_assert!(
+        count_ticks_slow(range, too_many_10s * 10.) <= target_count,
+        "count_ticks({:?}, {}) = {} <= {}",
+        range,
+        too_many_10s * 10.,
+        count_ticks_slow(range, too_many_10s * 10.),
+        target_count
+    );
+    // try 2 * our power of 10 that gives too many
+    if count_ticks(range, 2. * too_many_10s) <= target_count {
+        return 2. * too_many_10s;
+    }
+    // next try 5 * our power of 10 that gives too many
+    if count_ticks(range, 5. * too_many_10s) <= target_count {
+        return 5. * too_many_10s;
+    }
+    debug_assert!(count_ticks(range, 10. * too_many_10s) <= target_count);
+    // then it must be the next power of 10
+    too_many_10s * 10.
+}
+
+/// Find a value of type 10<sup>x</sup> where x is an integer, such that ticks at that distance
+/// would result in too many ticks, but ticks at 10<sup>x+1</sup> would give too few (or just
+/// right). Returns spacing of ticks
+fn pow_10_just_too_many(range: Range, num_ticks: usize) -> f64 {
+    // -1 for fence/fence post
+    let num_ticks = (num_ticks - 1) as f64;
+    let ideal_spacing = range.size() / num_ticks;
+    let spacing = (10.0f64).powf(ideal_spacing.log10().floor());
+    // The actual value where the first tick will go (we need to work out if we lose too much space
+    // at the ends and we end up being too few instead of too many)
+    let first_tick = calc_next_tick(range.min(), spacing);
+    // If when taking account of the above we still have too many ticks
+    // we already -1 from num_ticks.
+    if first_tick + num_ticks * spacing < calc_prev_tick(range.max(), spacing) {
+        // then just return
+        spacing
+    } else {
+        // else go to the next smaller power of 10
+        spacing * 0.1
+    }
+}

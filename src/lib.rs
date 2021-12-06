@@ -10,9 +10,10 @@
 };*/
 
 pub mod axis;
+pub mod prelude;
 pub mod ticker;
 //mod box_plot;
-//mod histogram;
+pub mod histogram;
 //mod line_chart;
 //mod pie_chart;
 pub mod range;

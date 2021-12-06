@@ -1,6 +1,14 @@
 use crate::{ArcStr, Range, Sequence};
 use std::fmt;
 
+/// A position on an axis that we can mark and label.
+pub struct Tick {
+    /// The distance along the axis that the tick should be displayed, in `0..=axis_len`
+    pub pos: f64,
+    /// The label that should be displayed
+    pub label: ArcStr,
+}
+
 pub trait Ticker {
     type TickIter<'a>: Iterator<Item = Tick>
     where
@@ -51,11 +59,4 @@ where
             label: v.to_string().into(),
         })
     }
-}
-
-pub struct Tick {
-    /// The distance along the axis that the tick should be displayed, in `0..=axis_len`
-    pub pos: f64,
-    /// The label that should be displayed
-    pub label: ArcStr,
 }

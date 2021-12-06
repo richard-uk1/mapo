@@ -105,87 +105,93 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
     }
 
     // Call this before draw.
-    pub fn layout(&mut self, ctx: &mut RC) -> Result<(), piet::Error> {
-        self.build_layouts(ctx)?;
+    pub fn layout(&mut self, rc: &mut RC) -> Result<(), piet::Error> {
+        self.build_layouts(rc)?;
         self.fit_labels();
         Ok(())
     }
 
     /// Draw the layout
-    pub fn draw(&self, pos: Point, ctx: &mut RC) {
-        if self.label_layouts.is_empty() && self.ticker.len(self.axis_len) != 0 {
-            panic!("Must call `layout` before `draw`");
+    pub fn draw(&self, pos: impl Into<Point>, rc: &mut RC) {
+        fn inner<T: Ticker, RC: RenderContext>(this: &Axis<T, RC>, pos: Point, rc: &mut RC) {
+            if this.label_layouts.is_empty() && this.ticker.len(this.axis_len) != 0 {
+                panic!("Must call `layout` before `draw`");
+            }
+            rc.with_save(|rc| {
+                rc.transform(Affine::translate(pos.to_vec2()));
+                // ticks
+                for tick in this.ticker.ticks(this.axis_len) {
+                    let tick_line = match (this.direction, this.label_pos) {
+                        (Direction::Vertical, LabelPosition::Before) => {
+                            // left
+                            Line::new((0., tick.pos), (-5., tick.pos))
+                        }
+                        (Direction::Vertical, LabelPosition::After) => {
+                            // right
+                            Line::new((0., tick.pos), (5., tick.pos))
+                        }
+                        (Direction::Horizontal, LabelPosition::Before) => {
+                            // above
+                            Line::new((tick.pos, 0.), (tick.pos, -5.))
+                        }
+                        (Direction::Horizontal, LabelPosition::After) => {
+                            // below
+                            Line::new((tick.pos, 0.), (tick.pos, 5.))
+                        }
+                    };
+                    rc.stroke(tick_line, &Color::grey8(80), 1.);
+                }
+
+                // axis line (extend to contain tick at edge)
+                let axis_line = match this.direction {
+                    Direction::Horizontal => Line::new((-1., 0.), (this.axis_len + 1., 0.)),
+                    Direction::Vertical => Line::new((0., -1.), (0., this.axis_len + 1.)),
+                };
+                rc.stroke(axis_line, &Color::BLACK, 2.);
+
+                // labels
+                for idx in this.labels_to_draw.iter().copied() {
+                    let layout = &this.label_layouts[idx];
+                    let tick = this.ticks().nth(idx).unwrap();
+                    let pos = match (this.direction, this.label_pos) {
+                        (Direction::Vertical, LabelPosition::Before) => {
+                            // left
+                            Point::new(
+                                -layout.size().width - 10.,
+                                tick.pos - layout.size().height * 0.5,
+                            )
+                        }
+                        (Direction::Vertical, LabelPosition::After) => {
+                            // right
+                            Point::new(10., tick.pos - layout.size().height * 0.5)
+                        }
+                        (Direction::Horizontal, LabelPosition::Before) => {
+                            // above
+                            Point::new(
+                                tick.pos - layout.size().width * 0.5,
+                                -5. - layout.size().height,
+                            )
+                        }
+                        (Direction::Horizontal, LabelPosition::After) => {
+                            // below
+                            Point::new(tick.pos - layout.size().width * 0.5, 5.)
+                        }
+                    };
+                    rc.draw_text(layout, pos);
+                }
+                Ok(())
+            })
+            .unwrap()
         }
-        ctx.with_save(|ctx| {
-            ctx.transform(Affine::translate(pos.to_vec2()));
-            // axis line (extend to contain tick at edge)
-            let axis_line = match self.direction {
-                Direction::Horizontal => Line::new((-1., 0.), (self.axis_len + 1., 0.)),
-                Direction::Vertical => Line::new((0., -1.), (0., self.axis_len + 1.)),
-            };
-            ctx.stroke(axis_line, &Color::BLACK, 2.);
-
-            // ticks
-            for tick in self.ticker.ticks(self.axis_len) {
-                let tick_line = match (self.direction, self.label_pos) {
-                    (Direction::Vertical, LabelPosition::Before) => {
-                        // right
-                        Line::new((0., tick.pos), (5., tick.pos))
-                    }
-                    (Direction::Vertical, LabelPosition::After) => {
-                        // left
-                        Line::new((0., tick.pos), (-5., tick.pos))
-                    }
-                    (Direction::Horizontal, LabelPosition::Before) => {
-                        // below
-                        Line::new((tick.pos, 0.), (tick.pos, 5.))
-                    }
-                    (Direction::Horizontal, LabelPosition::After) => {
-                        // above
-                        Line::new((tick.pos, 0.), (tick.pos, -5.))
-                    }
-                };
-                ctx.stroke(tick_line, &Color::grey8(80), 1.);
-            }
-
-            // labels
-            for idx in self.labels_to_draw.iter().copied() {
-                let layout = &self.label_layouts[idx];
-                let tick = self.ticks().nth(idx).unwrap();
-                let pos = match (self.direction, self.label_pos) {
-                    (Direction::Vertical, LabelPosition::Before) => {
-                        // left
-                        Point::new(
-                            -layout.size().width - 5.,
-                            tick.pos - layout.size().height * 0.5,
-                        )
-                    }
-                    (Direction::Vertical, LabelPosition::After) => {
-                        // right
-                        todo!()
-                    }
-                    (Direction::Horizontal, LabelPosition::Before) => {
-                        // above
-                        todo!()
-                    }
-                    (Direction::Horizontal, LabelPosition::After) => {
-                        // below
-                        Point::new(tick.pos - layout.size().width * 0.5, 5.)
-                    }
-                };
-                ctx.draw_text(layout, pos);
-            }
-            Ok(())
-        })
-        .unwrap()
+        inner(self, pos.into(), rc)
     }
 
-    fn build_layouts(&mut self, ctx: &mut RC) -> Result<(), piet::Error> {
+    fn build_layouts(&mut self, rc: &mut RC) -> Result<(), piet::Error> {
         if !self.label_layouts.is_empty() || self.ticker.len(self.axis_len) == 0 {
             // nothing to do
             return Ok(());
         }
-        let text = ctx.text();
+        let text = rc.text();
         for tick in self.ticker.ticks(self.axis_len) {
             let layout = text
                 .new_text_layout(tick.label)
@@ -268,19 +274,19 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
     }
 
     /// Call this function during the parent's update cycle.
-    pub fn update(&mut self, ctx: &mut UpdateCtx) -> bool {
+    pub fn update(&mut self, rc: &mut Updaterc) -> bool {
         let mut needs_rebuild = false;
         if let Some(layouts) = self.layouts.as_mut() {
             for layout in layouts.iter_mut() {
-                needs_rebuild |= layout.layout.needs_rebuild_after_update(ctx);
+                needs_rebuild |= layout.layout.needs_rebuild_after_update(rc);
             }
         }
-        needs_rebuild |= ctx.env_key_changed(&theme::AXES_COLOR);
+        needs_rebuild |= rc.env_key_changed(&theme::AXES_COLOR);
         needs_rebuild
     }
 
     /// Rebuild the retained state, as needed.
-    pub fn rebuild_if_needed(&mut self, ctx: &mut PietText, env: &Env) {
+    pub fn rebuild_if_needed(&mut self, rc: &mut PietText, env: &Env) {
         if self.scale_ticker.is_none() {
             self.layouts = None;
             self.scale_ticker = Some(ContTicker::new(
@@ -296,7 +302,7 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
                     .map(|tick| {
                         let mut layout =
                             TextLayout::from_text(format!("{}", tick.value.to_precision(5)));
-                        layout.rebuild_if_needed(ctx, env);
+                        layout.rebuild_if_needed(rc, env);
                         let size = layout.size();
                         let mut layout = PositionedLayout {
                             position: self.direction.label_position(
@@ -307,7 +313,7 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
                             ),
                             layout,
                         };
-                        layout.rebuild_if_needed(ctx, env);
+                        layout.rebuild_if_needed(rc, env);
                         layout
                     })
                     .collect(),
@@ -366,16 +372,16 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
         });
     }
 
-    pub fn draw(&mut self, ctx: &mut RenderCtx, env: &Env, draw_axis: bool, draw_labels: bool) {
+    pub fn draw(&mut self, rc: &mut Renderrc, env: &Env, draw_axis: bool, draw_labels: bool) {
         // draw axis
         if draw_axis {
-            let axis_brush = ctx.solid_brush(self.axis_color.resolve(env));
-            ctx.stroke(self.direction.axis_line(self.graph_bounds), &axis_brush, 2.);
+            let axis_brush = rc.solid_brush(self.axis_color.resolve(env));
+            rc.stroke(self.direction.axis_line(self.graph_bounds), &axis_brush, 2.);
         }
         // draw tick labels
         if draw_labels {
             for layout in self.layouts.as_mut().unwrap().iter_mut() {
-                layout.draw(ctx);
+                layout.draw(rc);
             }
         }
     }
@@ -422,11 +428,11 @@ pub struct PositionedLayout<T> {
 }
 
 impl<T: TextStorage> PositionedLayout<T> {
-    pub fn rebuild_if_needed(&mut self, ctx: &mut PietText, env: &Env) {
-        self.layout.rebuild_if_needed(ctx, env);
+    pub fn rebuild_if_needed(&mut self, rc: &mut PietText, env: &Env) {
+        self.layout.rebuild_if_needed(rc, env);
     }
-    pub fn draw(&mut self, ctx: &mut PaintCtx) {
-        self.layout.draw(ctx, self.position)
+    pub fn draw(&mut self, rc: &mut Paintrc) {
+        self.layout.draw(rc, self.position)
     }
 }
 
