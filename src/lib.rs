@@ -1,7 +1,4 @@
 //! Piet charts
-#![feature(generic_associated_types)]
-#![feature(type_alias_impl_trait)]
-#![feature(never_type)]
 
 //use druid::{kurbo::Rect, Color, Insets};
 /*use piet::{
@@ -16,12 +13,12 @@ pub mod ticker;
 pub mod histogram;
 //mod line_chart;
 //mod pie_chart;
-pub mod range;
+mod interval;
 pub mod sequence;
 pub mod theme;
 
 pub use crate::{
-    range::Range,
+    interval::{Interval, IntervalTicker},
     sequence::{Categorical, Numeric, Sequence},
 };
 

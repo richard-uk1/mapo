@@ -1,19 +1,15 @@
 use crate::ticker::{Tick, Ticker};
-use crate::Range;
-use std::{borrow::Cow, fmt, mem, sync::Arc};
+use crate::Interval;
+use std::{borrow::Cow, fmt, iter, mem, sync::Arc};
 
-/// Because we layout all labels, we should have some cap for when there are so many it will affect perf.
-/// The number should be high enough that you couldn't possibly want more.
+/// Because we layout all labels, we should have some cap for when there are so many it will affect
+/// perf.  The number should be high enough that you couldn't possibly want more.
 const MAX_LABELS: usize = 100;
 
-/// The discrete analogue of `Ranged`.
-pub trait Sequence {
-    type Item<'a>
-    where
-        Self: 'a;
-    type Iter<'a>: Iterator<Item = Self::Item<'a>> + 'a
-    where
-        Self: 'a;
+/// The discrete analogue of `Interval`.
+pub trait Sequence: fmt::Debug {
+    type Item;
+    type Iter: Iterator<Item = Self::Item>;
 
     /// The number of items in the sequence.
     fn len(&self) -> usize;
@@ -21,16 +17,58 @@ pub trait Sequence {
     /// The value of the sequence at `idx`.
     ///
     /// This function should always return `Some` if `idx` < `self.len()`
-    fn get(&self, idx: usize) -> Option<Self::Item<'_>>;
+    fn get(&self, idx: usize) -> Option<Self::Item>;
 
     /// Returns an iterator over the values.
-    fn iter(&self) -> Self::Iter<'_>;
+    fn iter(&self) -> Self::Iter;
+}
+
+impl<S> Ticker for S
+where
+    S: Sequence,
+    S::Item: fmt::Display,
+{
+    type TickIter = SequenceTickIter<S>;
+
+    fn len(&self, _axis_len: f64) -> usize {
+        Sequence::len(self)
+    }
+
+    fn ticks(&self, axis_len: f64) -> Self::TickIter {
+        // gap between labels. We'll get NaN when self.len() == 1, but it doesn't matter
+        // because the iterator will be empty TODO this isn't true.
+        SequenceTickIter {
+            gap: axis_len / (self.len() as f64 - 1.),
+            inner: self.iter().enumerate(),
+        }
+    }
+}
+
+pub struct SequenceTickIter<S: Sequence> {
+    gap: f64,
+    inner: iter::Enumerate<S::Iter>,
+}
+
+impl<S> Iterator for SequenceTickIter<S>
+where
+    S: Sequence,
+    S::Item: fmt::Display,
+{
+    type Item = Tick;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (idx, v) = self.inner.next()?;
+        Some(Tick {
+            pos: idx as f64 * self.gap,
+            label: v.to_string().into(),
+        })
+    }
 }
 
 /// A numeric sequence
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct Numeric {
-    range: Range,
+    interval: Interval,
     step: f64,
 }
 
@@ -40,37 +78,37 @@ impl Numeric {
     /// # Panics
     ///
     /// Panics if `0 < step < ∞` is not true.
-    pub fn from_range_step(range: Range, step: f64) -> Self {
+    pub fn from_interval_step(interval: Interval, step: f64) -> Self {
         assert!(step.is_finite() && step > 0., "0 < {} < ∞", step);
-        Self { range, step }
+        Self { interval, step }
     }
 
     /// Construct a numeric sequence.
     ///
     /// # Panics
     ///
-    /// Panics if `0 < step < ∞` or `-∞ < min <= max < ∞` is not true.
+    /// Panics if `0 < step < ∞` or `-∞ < min < max < ∞` is not true.
     pub fn new(min: f64, max: f64, step: f64) -> Self {
-        Self::from_range_step(Range::new(min, max), step)
+        Self::from_interval_step(Interval::new(min, max), step)
     }
 
-    /// Get the range for this sequence.
-    pub fn range(&self) -> Range {
-        self.range
+    /// Get the interval for this sequence.
+    pub fn interval(&self) -> Interval {
+        self.interval
     }
 
     /// Get the minimum value for this sequence.
     pub fn min(&self) -> f64 {
-        self.range.min()
+        self.interval.min()
     }
 
     /// Get the maximum value for this sequence.
     ///
-    /// Note that this might be different from `self.range().max()` if `self.range()`s length is
-    /// not an exact multiple of `self.step()`.
+    /// Note that this might be different from `self.interval().max()` if `self.interval()`'s
+    /// length is not an exact multiple of `self.step()`.
     pub fn max(&self) -> f64 {
-        let last_idx = (self.range.width() / self.step).floor();
-        self.range.min() + self.step * last_idx
+        let last_idx = (self.interval.size() / self.step).floor();
+        self.interval.min() + self.step * last_idx
     }
 
     /// Get the step value for this sequence.
@@ -80,29 +118,29 @@ impl Numeric {
 }
 
 impl Sequence for Numeric {
-    type Item<'a> = f64;
-    type Iter<'a> = impl Iterator<Item = Self::Item<'a>> + 'a;
+    type Item = f64;
+    type Iter = NumericIter;
 
     fn len(&self) -> usize {
         // ignoring overflow for now
-        ((self.range.max() - self.range.min()) / self.step).floor() as usize
+        ((self.interval.max() - self.interval.min()) / self.step).floor() as usize
     }
 
-    fn get(&self, idx: usize) -> Option<Self::Item<'_>> {
-        let val = self.range.min() + idx as f64 * self.step;
-        if val > self.range.max() {
+    fn get(&self, idx: usize) -> Option<Self::Item> {
+        let val = self.interval.min() + idx as f64 * self.step;
+        if val > self.interval.max() {
             None
         } else {
             Some(val)
         }
     }
 
-    fn iter(&self) -> Self::Iter<'_> {
+    fn iter(&self) -> Self::Iter {
         NumericIter::new(*self)
     }
 }
 
-struct NumericIter {
+pub struct NumericIter {
     inner: Numeric,
     next: f64,
 }
@@ -111,7 +149,7 @@ impl NumericIter {
     fn new(inner: Numeric) -> Self {
         NumericIter {
             inner,
-            next: inner.range.min(),
+            next: inner.interval.min(),
         }
     }
 }
@@ -120,7 +158,7 @@ impl Iterator for NumericIter {
     type Item = f64;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.next > self.inner.range.max() {
+        if self.next > self.inner.interval.max() {
             return None;
         }
         let out = self.next;
@@ -129,12 +167,18 @@ impl Iterator for NumericIter {
     }
 }
 
+/// A list of categories.
+///
+/// For this list to be used as an axis, the categories (`T`) should implement `Clone` and
+/// `Display`. It's recommended to keep the cost of cloning `T` cheap (possibly using reference
+/// counting).
 #[derive(Debug, Clone)]
 pub struct Categorical<T> {
     categories: Arc<[T]>,
 }
 
 impl<T> Categorical<T> {
+    /// Create a new list of categories.
     pub fn new(categories: impl Into<Arc<[T]>>) -> Self {
         Categorical {
             categories: categories.into(),
@@ -153,26 +197,37 @@ impl<T> Categorical<T> {
     }
 }
 
-impl<T> Sequence for Categorical<T> {
-    type Item<'a>
-    where
-        T: 'a,
-    = &'a T;
-    type Iter<'a>
-    where
-        T: 'a,
-    = impl Iterator<Item = Self::Item<'a>> + 'a;
+impl<T: fmt::Debug + Clone + 'static> Sequence for Categorical<T> {
+    type Item = T;
+    type Iter = CategoricalIter<T>;
 
     fn len(&self) -> usize {
         self.categories.len()
     }
 
-    fn get(&self, idx: usize) -> Option<Self::Item<'_>> {
-        self.categories.get(idx)
+    fn get(&self, idx: usize) -> Option<Self::Item> {
+        self.categories.get(idx).cloned()
     }
 
-    fn iter(&self) -> Self::Iter<'_> {
-        self.categories.iter()
+    fn iter(&self) -> Self::Iter {
+        CategoricalIter {
+            inner: self.categories.clone(),
+            idx: 0,
+        }
+    }
+}
+
+pub struct CategoricalIter<T> {
+    inner: Arc<[T]>,
+    idx: usize,
+}
+
+impl<T: Clone> Iterator for CategoricalIter<T> {
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        let out = self.inner.get(self.idx)?;
+        self.idx += 1;
+        Some((*out).clone())
     }
 }
 
@@ -216,28 +271,55 @@ impl<S: Sequence> SequenceExt for S {
     }
 }
 
+#[derive(Debug)]
 pub struct SpaceAround<S>(S);
+
+impl<S> std::ops::Deref for SpaceAround<S> {
+    type Target = S;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 impl<S> Ticker for SpaceAround<S>
 where
     S: Sequence,
-    for<'a> S::Item<'a>: fmt::Display,
+    S::Item: fmt::Display,
 {
-    type TickIter<'a>
-    where
-        Self: 'a,
-    = impl Iterator<Item = Tick>;
+    type TickIter = SpaceAroundTickIter<S>;
 
     fn len(&self, _axis_len: f64) -> usize {
         self.0.len()
     }
 
-    fn ticks(&self, axis_len: f64) -> Self::TickIter<'_> {
+    fn ticks(&self, axis_len: f64) -> Self::TickIter {
         // gap between labels. We'll get NaN when self.len() == 0, but it doesn't matter
         // because the iterator will be empty
         let gap = axis_len / self.0.len() as f64;
-        self.0.iter().enumerate().map(move |(idx, v)| Tick {
-            pos: (idx as f64 + 0.5) * gap,
+        SpaceAroundTickIter {
+            gap: axis_len / self.0.len() as f64,
+            inner: self.0.iter().enumerate(),
+        }
+    }
+}
+
+// We have to do this because we have to name the type (until type_alias_impl_trait lands)
+pub struct SpaceAroundTickIter<S: Sequence> {
+    gap: f64,
+    inner: iter::Enumerate<S::Iter>,
+}
+
+impl<S> Iterator for SpaceAroundTickIter<S>
+where
+    S: Sequence,
+    S::Item: fmt::Display,
+{
+    type Item = Tick;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (idx, v) = self.inner.next()?;
+        Some(Tick {
+            pos: (idx as f64 + 0.5) * self.gap,
             label: v.to_string().into(),
         })
     }

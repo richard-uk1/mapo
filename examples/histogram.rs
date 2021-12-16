@@ -5,7 +5,7 @@ use mapo::{
     Categorical,
 };
 use piet::{
-    kurbo::{Point, Rect, Size},
+    kurbo::{Affine, Point, Rect, Size, Vec2},
     Color,
 };
 use piet_common::{Device, Piet, RenderContext};
@@ -33,8 +33,9 @@ fn main() {
 }
 
 fn draw(rc: &mut Piet) {
+    /* todo move into seaparate example
     let mut axis = Axis::new(
-        Direction::Horizontal,
+        Direction::Left,
         LabelPosition::Before,
         WIDTH as f64 * 0.6,
         Categorical::new(vec![
@@ -44,17 +45,29 @@ fn draw(rc: &mut Piet) {
     axis.layout(rc).unwrap();
     axis.draw((WIDTH as f64 * 0.2, 100.), rc);
     let mut axis = Axis::new(
-        Direction::Vertical,
+        Direction::Down,
         LabelPosition::After,
         HEIGHT as f64 * 0.6,
         Categorical::new(vec!["first", "second", "third", "fourth", "eggs"]).space_around(),
     );
     axis.layout(rc).unwrap();
     axis.draw((100., HEIGHT as f64 * 0.2), rc);
+    */
 
     let hist_size = Size::new(WIDTH as f64 * 0.6, HEIGHT as f64 * 0.6);
-    let mut histogram = Histogram::new(hist_size, ["first", "second", "third"], vec![12., 14., 2.]);
+    let hist_tl = Vec2::new(WIDTH as f64 * 0.2, HEIGHT as f64 * 0.2);
+    let mut histogram = Histogram::<Categorical<&'static str>, _>::new(
+        hist_size,
+        ["first", "second", "third"],
+        vec![12., 14., 10.],
+    )
+    .with_bar_spacing(30.);
 
-    histogram.layout(rc);
-    histogram.draw(rc);
+    rc.with_save(|rc| {
+        rc.transform(Affine::translate(hist_tl));
+        histogram.layout(rc).unwrap();
+        histogram.draw(rc);
+        Ok(())
+    })
+    .unwrap();
 }

@@ -2,7 +2,7 @@
 use crate::{
     theme,
     ticker::{Tick, Ticker},
-    ArcStr, Range, Sequence,
+    ArcStr, Interval, Sequence,
 };
 use piet::{
     kurbo::{Affine, Line, Point, Rect, Size},
@@ -13,11 +13,6 @@ use std::{
     sync::Arc,
 };
 use to_precision::FloatExt as _;
-
-const SCALE_TICK_MARGIN: f64 = 5.;
-/// The absolute minimum label width. This is used to bound the number of labels at the start of
-/// our layout algorithm (where labels are removed until the remaining ones fit).
-const MIN_LABEL_WIDTH: f64 = 5.;
 
 /// Denotes where the axis will be drawn, relative to the chart area.
 ///
@@ -41,8 +36,10 @@ pub enum LabelPosition {
 /// Axes must be drawn either vertically or horizontally.
 #[derive(Debug, Clone, Copy)]
 pub enum Direction {
-    Vertical,
-    Horizontal,
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 /// A struct for retaining text layout information for an axis scale.
@@ -78,6 +75,26 @@ pub struct Axis<T, RC: RenderContext> {
     labels_to_draw: Vec<usize>,
 }
 
+impl<T: fmt::Debug, RC: RenderContext> fmt::Debug for Axis<T, RC> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Axis")
+            .field("direction", &self.direction)
+            .field("label_pos", &self.label_pos)
+            .field("axis_len", &self.axis_len)
+            .field("ticker", &self.ticker)
+            .field(
+                "label_layouts",
+                &self
+                    .label_layouts
+                    .iter()
+                    .map(|layout| format!("size: {:?}", layout.size()))
+                    .collect::<Vec<_>>(),
+            )
+            .field("labels_to_draw", &self.labels_to_draw)
+            .finish()
+    }
+}
+
 impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
     /// Create a new axis.
     pub fn new(direction: Direction, label_pos: LabelPosition, axis_len: f64, ticker: T) -> Self {
@@ -92,16 +109,27 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
         }
     }
 
-    pub fn set_ticker(mut self, new_ticker: T) -> Axis<T, RC> {
+    pub fn ticker(&self) -> &T {
+        &self.ticker
+    }
+
+    /// Iterates over the ticker's ticks, transforming the position if the axis is reverse
+    /// direction (either Left or Up).
+    pub fn ticks(&self) -> impl Iterator<Item = Tick> + '_ {
+        self.ticker
+            .ticks(self.axis_len)
+            .map(|tick| match self.direction {
+                Direction::Up | Direction::Left => Tick {
+                    pos: self.axis_len - tick.pos,
+                    label: tick.label,
+                },
+                _ => tick,
+            })
+    }
+
+    pub fn set_ticker(&mut self, new_ticker: T) {
+        self.ticker = new_ticker;
         self.label_layouts.clear();
-        Axis {
-            direction: self.direction,
-            label_pos: self.label_pos,
-            axis_len: self.axis_len,
-            ticker: new_ticker,
-            label_layouts: self.label_layouts,
-            labels_to_draw: self.labels_to_draw,
-        }
     }
 
     // Call this before draw.
@@ -111,30 +139,57 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
         Ok(())
     }
 
+    pub fn size(&self) -> Size {
+        self.check_layout_called();
+
+        // Find the maximum width and height of any label
+        let max_label_size = self
+            .labels_to_draw()
+            .fold(Size::ZERO, |mut size, (_, layout)| {
+                let run_size = layout.size();
+                if run_size.width > size.width {
+                    size.width = run_size.width;
+                }
+                if run_size.height > size.height {
+                    size.height = run_size.height;
+                }
+                size
+            });
+
+        // TODO this could be more accurate. The 1.5 is a fiddle factor because measurement doesn't
+        // seem to be working perfectly.
+        match self.direction {
+            Direction::Up | Direction::Down => {
+                Size::new(max_label_size.width * 1.5 + theme::MARGIN, self.axis_len)
+            }
+            Direction::Left | Direction::Right => {
+                Size::new(self.axis_len, max_label_size.height * 1.5 + theme::MARGIN)
+            }
+        }
+    }
+
     /// Draw the layout
     pub fn draw(&self, pos: impl Into<Point>, rc: &mut RC) {
         fn inner<T: Ticker, RC: RenderContext>(this: &Axis<T, RC>, pos: Point, rc: &mut RC) {
-            if this.label_layouts.is_empty() && this.ticker.len(this.axis_len) != 0 {
-                panic!("Must call `layout` before `draw`");
-            }
+            this.check_layout_called();
             rc.with_save(|rc| {
                 rc.transform(Affine::translate(pos.to_vec2()));
-                // ticks
-                for tick in this.ticker.ticks(this.axis_len) {
+                // ticks TODO flip the for & match
+                for tick in this.ticks() {
                     let tick_line = match (this.direction, this.label_pos) {
-                        (Direction::Vertical, LabelPosition::Before) => {
+                        (Direction::Up | Direction::Down, LabelPosition::Before) => {
                             // left
                             Line::new((0., tick.pos), (-5., tick.pos))
                         }
-                        (Direction::Vertical, LabelPosition::After) => {
+                        (Direction::Up | Direction::Down, LabelPosition::After) => {
                             // right
                             Line::new((0., tick.pos), (5., tick.pos))
                         }
-                        (Direction::Horizontal, LabelPosition::Before) => {
+                        (Direction::Left | Direction::Right, LabelPosition::Before) => {
                             // above
                             Line::new((tick.pos, 0.), (tick.pos, -5.))
                         }
-                        (Direction::Horizontal, LabelPosition::After) => {
+                        (Direction::Left | Direction::Right, LabelPosition::After) => {
                             // below
                             Line::new((tick.pos, 0.), (tick.pos, 5.))
                         }
@@ -144,37 +199,40 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
 
                 // axis line (extend to contain tick at edge)
                 let axis_line = match this.direction {
-                    Direction::Horizontal => Line::new((-1., 0.), (this.axis_len + 1., 0.)),
-                    Direction::Vertical => Line::new((0., -1.), (0., this.axis_len + 1.)),
+                    Direction::Left | Direction::Right => {
+                        Line::new((-1., 0.), (this.axis_len + 1., 0.))
+                    }
+                    Direction::Up | Direction::Down => {
+                        Line::new((0., -1.), (0., this.axis_len + 1.))
+                    }
                 };
                 rc.stroke(axis_line, &Color::BLACK, 2.);
 
                 // labels
-                for idx in this.labels_to_draw.iter().copied() {
-                    let layout = &this.label_layouts[idx];
-                    let tick = this.ticks().nth(idx).unwrap();
+                let margin = this.scale_margin();
+                for (tick, layout) in this.labels_to_draw() {
                     let pos = match (this.direction, this.label_pos) {
-                        (Direction::Vertical, LabelPosition::Before) => {
+                        (Direction::Up | Direction::Down, LabelPosition::Before) => {
                             // left
                             Point::new(
-                                -layout.size().width - 10.,
+                                -layout.size().width + margin,
                                 tick.pos - layout.size().height * 0.5,
                             )
                         }
-                        (Direction::Vertical, LabelPosition::After) => {
+                        (Direction::Up | Direction::Down, LabelPosition::After) => {
                             // right
-                            Point::new(10., tick.pos - layout.size().height * 0.5)
+                            Point::new(margin, tick.pos - layout.size().height * 0.5)
                         }
-                        (Direction::Horizontal, LabelPosition::Before) => {
+                        (Direction::Left | Direction::Right, LabelPosition::Before) => {
                             // above
                             Point::new(
                                 tick.pos - layout.size().width * 0.5,
-                                -5. - layout.size().height,
+                                margin - layout.size().height,
                             )
                         }
-                        (Direction::Horizontal, LabelPosition::After) => {
+                        (Direction::Left | Direction::Right, LabelPosition::After) => {
                             // below
-                            Point::new(tick.pos - layout.size().width * 0.5, 5.)
+                            Point::new(tick.pos - layout.size().width * 0.5, margin)
                         }
                     };
                     rc.draw_text(layout, pos);
@@ -195,7 +253,7 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
         for tick in self.ticker.ticks(self.axis_len) {
             let layout = text
                 .new_text_layout(tick.label)
-                .default_attribute(TextAttribute::FontSize(12.))
+                .default_attribute(TextAttribute::FontSize(theme::LABEL_FONT_SIZE))
                 .build()?;
 
             self.label_layouts.push(layout);
@@ -226,6 +284,17 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
         self.labels_to_draw.clear();
     }
 
+    /// Iterate over only those labels we will be drawing.
+    fn labels_to_draw<'a>(
+        &'a self,
+    ) -> impl Iterator<Item = (Tick, &'a <RC as RenderContext>::TextLayout)> + 'a {
+        self.labels_to_draw.iter().map(|idx| {
+            let tick = self.ticks().nth(*idx).unwrap();
+            let layout = &self.label_layouts[*idx];
+            (tick, layout)
+        })
+    }
+
     /// Returns `true` if all the labels selected for drawing will fit without overlapping
     /// each other.
     ///
@@ -233,20 +302,30 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
     ///
     /// Panics if the label layouts have not been built.
     fn test_layouts_fit(&self) -> bool {
-        let mut prev_end = f64::NEG_INFINITY;
+        let mut prev_end = match self.direction {
+            Direction::Up | Direction::Left => f64::INFINITY,
+            Direction::Down | Direction::Right => f64::NEG_INFINITY,
+        };
         match self.direction {
-            Direction::Vertical => {
+            Direction::Up | Direction::Down => {
                 for idx in self.labels_to_draw.iter().copied() {
                     let layout = &self.label_layouts[idx];
                     let size = layout.size();
                     let tick = self.ticks().nth(idx).unwrap();
-                    if prev_end >= tick.pos - size.height * 0.5 {
-                        return false;
+                    if matches!(self.direction, Direction::Down) {
+                        if prev_end >= tick.pos - size.height * 0.5 {
+                            return false;
+                        }
+                        prev_end = tick.pos + size.height * 0.5;
+                    } else {
+                        if prev_end <= tick.pos + size.height * 0.5 {
+                            return false;
+                        }
+                        prev_end = tick.pos - size.height * 0.5;
                     }
-                    prev_end = tick.pos + size.height * 0.5;
                 }
             }
-            Direction::Horizontal => {
+            Direction::Left | Direction::Right => {
                 for idx in self.labels_to_draw.iter().copied() {
                     let layout = &self.label_layouts[idx];
                     let size = layout.size();
@@ -261,8 +340,28 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
         true
     }
 
-    fn ticks(&self) -> impl Iterator<Item = Tick> + '_ {
-        self.ticker.ticks(self.axis_len)
+    fn check_layout_called(&self) {
+        if self.label_layouts.is_empty() && self.ticker.len(self.axis_len) != 0 {
+            panic!("Must call `layout` before `draw`");
+        }
+    }
+
+    /// Calc the transformation we will need to make to the label position
+    fn scale_margin(&self) -> f64 {
+        let mut scale_margin = match self.label_pos {
+            LabelPosition::Before => -1.,
+            LabelPosition::After => 1.,
+        } * theme::MARGIN;
+
+        // Account for line height
+        if matches!(
+            (self.direction, self.label_pos),
+            (Direction::Down, LabelPosition::After) | (Direction::Up, LabelPosition::Before)
+        ) {
+            scale_margin -= theme::LABEL_FONT_SIZE * 0.5;
+        }
+
+        scale_margin
     }
 
     /*
