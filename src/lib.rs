@@ -8,18 +8,21 @@
 
 pub mod axis;
 pub mod prelude;
-pub mod ticker;
+mod ticker;
 //mod box_plot;
 pub mod histogram;
 //mod line_chart;
 //mod pie_chart;
 mod interval;
-pub mod sequence;
+mod sequence;
 pub mod theme;
+mod trace;
 
 pub use crate::{
     interval::{Interval, IntervalTicker},
     sequence::{Categorical, Numeric, Sequence},
+    ticker::{Tick, Ticker},
+    trace::Trace,
 };
 
 pub type ArcStr = std::sync::Arc<str>;

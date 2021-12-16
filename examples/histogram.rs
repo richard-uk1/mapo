@@ -60,8 +60,7 @@ fn draw(rc: &mut Piet) {
         hist_size,
         ["first", "second", "third"],
         vec![12., 14., 10.],
-    )
-    .with_bar_spacing(30.);
+    );
 
     rc.with_save(|rc| {
         rc.transform(Affine::translate(hist_tl));
