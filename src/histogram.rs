@@ -11,7 +11,7 @@ use piet::{
     kurbo::{Affine, Insets, Line, Point, Rect, Size, Vec2},
     Color, RenderContext,
 };
-use std::{fmt, sync::Arc};
+use std::{f64::consts::FRAC_2_PI, fmt, sync::Arc};
 
 /// A histogram
 ///
@@ -131,24 +131,6 @@ where
         self.value_axis.draw(Point::ZERO, rc);
     }
 
-    /*
-    /// Draw on the bars that represent the data.
-    fn draw_bars(&self, rc: &mut RC) {
-        let bar_width_2 = (self.bar_slot_width() - self.bar_spacing) * 0.5;
-        let val_max = self.value_axis.ticker().interval().max();
-        for (val, tick) in self.values.iter().copied().zip(self.category_axis.ticks()) {
-            let bar = Rect {
-                x0: tick.pos - bar_width_2,
-                y0: self.chart_size.height * (1. - val / val_max),
-                x1: tick.pos + bar_width_2,
-                y1: self.chart_size.height,
-            };
-            rc.fill(bar, &self.bar_color.clone().with_alpha(0.8));
-            rc.stroke(bar, &self.bar_color, 2.);
-        }
-    }
-    */
-
     /// Draw on the gridlines (only horizontal)
     fn draw_grid(&self, rc: &mut RC) {
         for tick in self.value_axis.ticks() {
@@ -159,23 +141,6 @@ where
             );
         }
     }
-
-    /*
-    /// Ensure that the spacing is set to something sensible.
-    fn clamp_spacing(&mut self) {
-        let slot_width = self.bar_slot_width();
-        if self.bar_spacing > slot_width - 5. {
-            self.bar_spacing = slot_width - 5.;
-        }
-        if self.bar_spacing < 0. {
-            self.bar_spacing = 0.;
-        }
-    }
-
-    fn bar_slot_width(&self) -> f64 {
-        self.chart_size.width / self.values.len() as f64
-    }
-    */
 }
 
 impl<L, RC> Histogram<Categorical<L>, RC>
@@ -251,17 +216,23 @@ impl Trace for HistogramTrace {
             .full_value
             .unwrap_or_else(|| self.values.iter().copied().reduce(f64::max).unwrap_or(1.));
 
-        // TODO for auto widths, handle case where barrs are very thin.
-        let bar_width = self
-            .bar_width
-            .unwrap_or(0.9 * (self.size.width / self.values.len() as f64));
+        // The amount of space to fit each bar in.
+        let bar_gap = self.size.width / self.values.len() as f64;
+
+        let bar_width = self.bar_width.unwrap_or_else(|| {
+            // This function seems to give good results (scale factor chosen by eye)
+            const SCALE_F: f64 = 0.004;
+            let bar_factor = 1. - ((SCALE_F * bar_gap).atan() * FRAC_2_PI);
+
+            bar_factor * bar_gap
+        });
         let bar_width_2 = bar_width * 0.5;
 
         let positions = match &self.positions {
             Some(i) => Either::Left(i.iter().copied()),
             None => {
-                let gap = self.size.width / (self.values.len() as f64 + 1.);
-                Either::Right((1..=self.values.len()).map(move |cnt| gap * cnt as f64))
+                let gap = self.size.width / (self.values.len() as f64);
+                Either::Right((0..self.values.len()).map(move |cnt| gap * (0.5 + cnt as f64)))
             }
         };
 

@@ -10,7 +10,7 @@ use piet::{
 };
 use piet_common::{Device, Piet, RenderContext};
 
-const WIDTH: usize = 800;
+const WIDTH: usize = 400;
 const HEIGHT: usize = 600;
 
 fn main() {

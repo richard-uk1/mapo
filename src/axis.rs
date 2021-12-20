@@ -14,6 +14,8 @@ use std::{
 };
 use to_precision::FloatExt as _;
 
+const DEFAULT_LABEL_FONT_SIZE: f64 = 16.;
+
 /// Denotes where the axis will be drawn, relative to the chart area.
 ///
 /// This will affect the text direction of labels. You can use a `Direction::Left` axis vertically
@@ -62,7 +64,7 @@ pub struct Axis<T, RC: RenderContext> {
     // style
 
     // /// Axis/mark color
-    // axis_color: Color,
+    label_font_size: f64,
 
     // retained
     /// Our computed text layouts for the tick labels.
@@ -104,6 +106,8 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
             label_pos,
             axis_len,
             ticker,
+
+            label_font_size: DEFAULT_LABEL_FONT_SIZE,
             label_layouts: vec![],
             labels_to_draw: vec![],
         }
@@ -253,7 +257,7 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
         for tick in self.ticker.ticks(self.axis_len) {
             let layout = text
                 .new_text_layout(tick.label)
-                .default_attribute(TextAttribute::FontSize(theme::LABEL_FONT_SIZE))
+                .default_attribute(TextAttribute::FontSize(self.label_font_size))
                 .build()?;
 
             self.label_layouts.push(layout);
