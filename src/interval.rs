@@ -172,15 +172,14 @@ impl IntervalTicker {
 
     /// Calculates and caches the step size.
     fn step(&self, axis_len: f64) -> f64 {
-        // For now, we are going to assume that the interval is vertical, and that the text height is
-        // 20px. TODO drop the assumptions
-        //
-        // (*3): leave at least same-sized gap above and below label.
-        let max_count = (axis_len / (20. * 3.)) as usize;
-        *self
-            .step
-            .borrow_mut()
-            .get_or_insert_with(|| calc_tick_spacing(self.interval, max_count))
+        *self.step.borrow_mut().get_or_insert_with(|| {
+            // For now, we are going to assume that the interval is vertical, and that the text
+            // height is 20px. TODO drop the assumptions
+            //
+            // (*3): leave at least same-sized gap above and below label.
+            let max_count = (axis_len / (20. * 3.)) as usize;
+            calc_tick_spacing(self.interval, max_count)
+        })
     }
 }
 

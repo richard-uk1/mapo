@@ -1,10 +1,10 @@
 use crate::ticker::{Tick, Ticker};
 use crate::Interval;
-use std::{borrow::Cow, fmt, iter, mem, sync::Arc};
+use std::{fmt, iter, sync::Arc};
 
-/// Because we layout all labels, we should have some cap for when there are so many it will affect
-/// perf.  The number should be high enough that you couldn't possibly want more.
-const MAX_LABELS: usize = 100;
+// /// Because we layout all labels, we should have some cap for when there are so many it will affect
+// /// perf.  The number should be high enough that you couldn't possibly want more.
+//const MAX_LABELS: usize = 100;
 
 /// The discrete analogue of `Interval`.
 pub trait Sequence: fmt::Debug {
@@ -295,7 +295,6 @@ where
     fn ticks(&self, axis_len: f64) -> Self::TickIter {
         // gap between labels. We'll get NaN when self.len() == 0, but it doesn't matter
         // because the iterator will be empty
-        let gap = axis_len / self.0.len() as f64;
         SpaceAroundTickIter {
             gap: axis_len / self.0.len() as f64,
             inner: self.0.iter().enumerate(),

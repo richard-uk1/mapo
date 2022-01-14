@@ -2,17 +2,12 @@
 use crate::{
     theme,
     ticker::{Tick, Ticker},
-    ArcStr, Interval, Sequence,
 };
 use piet::{
-    kurbo::{Affine, Line, Point, Rect, Size},
-    Color, RenderContext, Text, TextAttribute, TextLayout, TextLayoutBuilder, TextStorage,
+    kurbo::{Line, Point, Size},
+    Color, RenderContext, Text, TextAttribute, TextLayout, TextLayoutBuilder,
 };
-use std::{
-    fmt::{self, Display},
-    sync::Arc,
-};
-use to_precision::FloatExt as _;
+use std::fmt;
 
 const DEFAULT_LABEL_FONT_SIZE: f64 = 16.;
 
@@ -117,6 +112,19 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
         &self.ticker
     }
 
+    pub fn set_ticker(&mut self, new_ticker: T) {
+        self.ticker = new_ticker;
+        self.label_layouts.clear();
+    }
+
+    pub fn set_axis_len(&mut self, new_len: f64) {
+        self.axis_len = new_len;
+        // We don't need to clear the layouts: we only need to re-test how many will fit.
+        // Here we clear `labels_to_draw` to make it more clear if the user forgot to call
+        // `layout`.
+        self.labels_to_draw.clear();
+    }
+
     /// Iterates over the ticker's ticks, transforming the position if the axis is reverse
     /// direction (either Left or Up).
     pub fn ticks(&self) -> impl Iterator<Item = Tick> + '_ {
@@ -129,18 +137,6 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
                 },
                 _ => tick,
             })
-    }
-
-    pub fn set_ticker(&mut self, new_ticker: T) {
-        self.ticker = new_ticker;
-        self.label_layouts.clear();
-    }
-
-    // Call this before draw.
-    pub fn layout(&mut self, rc: &mut RC) -> Result<(), piet::Error> {
-        self.build_layouts(rc)?;
-        self.fit_labels();
-        Ok(())
     }
 
     pub fn size(&self) -> Size {
@@ -172,80 +168,86 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
         }
     }
 
+    // Call this before draw.
+    pub fn layout(&mut self, rc: &mut RC) -> Result<(), piet::Error> {
+        self.build_layouts(rc)?;
+        self.fit_labels();
+        Ok(())
+    }
+
     /// Draw the layout
-    pub fn draw(&self, pos: impl Into<Point>, rc: &mut RC) {
-        fn inner<T: Ticker, RC: RenderContext>(this: &Axis<T, RC>, pos: Point, rc: &mut RC) {
-            this.check_layout_called();
-            rc.with_save(|rc| {
-                rc.transform(Affine::translate(pos.to_vec2()));
-                // ticks TODO flip the for & match
-                for tick in this.ticks() {
-                    let tick_line = match (this.direction, this.label_pos) {
-                        (Direction::Up | Direction::Down, LabelPosition::Before) => {
-                            // left
-                            Line::new((0., tick.pos), (-5., tick.pos))
-                        }
-                        (Direction::Up | Direction::Down, LabelPosition::After) => {
-                            // right
-                            Line::new((0., tick.pos), (5., tick.pos))
-                        }
-                        (Direction::Left | Direction::Right, LabelPosition::Before) => {
-                            // above
-                            Line::new((tick.pos, 0.), (tick.pos, -5.))
-                        }
-                        (Direction::Left | Direction::Right, LabelPosition::After) => {
-                            // below
-                            Line::new((tick.pos, 0.), (tick.pos, 5.))
-                        }
-                    };
-                    rc.stroke(tick_line, &Color::grey8(80), 1.);
-                }
+    pub fn draw(&self, rc: &mut RC) {
+        let Size { width, height } = self.size();
 
-                // axis line (extend to contain tick at edge)
-                let axis_line = match this.direction {
-                    Direction::Left | Direction::Right => {
-                        Line::new((-1., 0.), (this.axis_len + 1., 0.))
-                    }
-                    Direction::Up | Direction::Down => {
-                        Line::new((0., -1.), (0., this.axis_len + 1.))
-                    }
-                };
-                rc.stroke(axis_line, &Color::BLACK, 2.);
-
-                // labels
-                let margin = this.scale_margin();
-                for (tick, layout) in this.labels_to_draw() {
-                    let pos = match (this.direction, this.label_pos) {
-                        (Direction::Up | Direction::Down, LabelPosition::Before) => {
-                            // left
-                            Point::new(
-                                -layout.size().width + margin,
-                                tick.pos - layout.size().height * 0.5,
-                            )
-                        }
-                        (Direction::Up | Direction::Down, LabelPosition::After) => {
-                            // right
-                            Point::new(margin, tick.pos - layout.size().height * 0.5)
-                        }
-                        (Direction::Left | Direction::Right, LabelPosition::Before) => {
-                            // above
-                            Point::new(
-                                tick.pos - layout.size().width * 0.5,
-                                margin - layout.size().height,
-                            )
-                        }
-                        (Direction::Left | Direction::Right, LabelPosition::After) => {
-                            // below
-                            Point::new(tick.pos - layout.size().width * 0.5, margin)
-                        }
-                    };
-                    rc.draw_text(layout, pos);
+        // ticks TODO flip the for & match
+        for tick in self.ticks() {
+            let tick_line = match (self.direction, self.label_pos) {
+                (Direction::Up | Direction::Down, LabelPosition::Before) => {
+                    // left
+                    Line::new((width - 5., tick.pos), (width, tick.pos))
                 }
-                Ok(())
-            })
-            .unwrap()
+                (Direction::Up | Direction::Down, LabelPosition::After) => {
+                    // right
+                    Line::new((0., tick.pos), (5., tick.pos))
+                }
+                (Direction::Left | Direction::Right, LabelPosition::Before) => {
+                    // above
+                    Line::new((tick.pos, height - 5.), (tick.pos, height))
+                }
+                (Direction::Left | Direction::Right, LabelPosition::After) => {
+                    // below
+                    Line::new((tick.pos, 0.), (tick.pos, 5.))
+                }
+            };
+            rc.stroke(tick_line, &Color::grey8(80), 1.);
         }
-        inner(self, pos.into(), rc)
+
+        // axis line (extend to contain tick at edge)
+        let axis_line = match (self.direction, self.label_pos) {
+            (Direction::Left | Direction::Right, LabelPosition::Before) => {
+                Line::new((-1., height), (width + 1., height))
+            }
+            (Direction::Left | Direction::Right, LabelPosition::After) => {
+                Line::new((-1., 0.), (width + 1., 0.))
+            }
+            (Direction::Up | Direction::Down, LabelPosition::Before) => {
+                Line::new((width, -1.), (width, height + 1.))
+            }
+            (Direction::Up | Direction::Down, LabelPosition::After) => {
+                Line::new((0., -1.), (0., height + 1.))
+            }
+        };
+        rc.stroke(axis_line, &Color::BLACK, 2.);
+
+        // labels
+        let margin = self.scale_margin();
+        for (tick, layout) in self.labels_to_draw() {
+            let pos = match (self.direction, self.label_pos) {
+                (Direction::Up | Direction::Down, LabelPosition::Before) => {
+                    // left
+                    Point::new(
+                        width - layout.size().width + margin,
+                        tick.pos - layout.size().height * 0.5,
+                    )
+                }
+                (Direction::Up | Direction::Down, LabelPosition::After) => {
+                    // right
+                    Point::new(margin, tick.pos - layout.size().height * 0.5)
+                }
+                (Direction::Left | Direction::Right, LabelPosition::Before) => {
+                    // above
+                    Point::new(
+                        tick.pos - layout.size().width * 0.5,
+                        height - layout.size().height + margin,
+                    )
+                }
+                (Direction::Left | Direction::Right, LabelPosition::After) => {
+                    // below
+                    Point::new(tick.pos - layout.size().width * 0.5, margin)
+                }
+            };
+            rc.draw_text(layout, pos);
+        }
     }
 
     fn build_layouts(&mut self, rc: &mut RC) -> Result<(), piet::Error> {

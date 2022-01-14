@@ -2,13 +2,11 @@ use crate::{
     axis::{Axis, Direction, LabelPosition},
     prelude::*,
     sequence::{Sequence, SpaceAround},
-    theme,
-    ticker::Ticker,
-    Categorical, Interval, IntervalTicker, Trace,
+    theme, Categorical, Interval, IntervalTicker, Trace,
 };
-use itertools::{izip, Either};
+use itertools::izip;
 use piet::{
-    kurbo::{Affine, Insets, Line, Point, Rect, Size, Vec2},
+    kurbo::{Affine, Line, Point, Rect, Size},
     Color, RenderContext,
 };
 use std::{f64::consts::FRAC_2_PI, fmt, sync::Arc};
@@ -23,15 +21,10 @@ pub struct Histogram<S, RC: RenderContext> {
     category_axis: Axis<SpaceAround<S>, RC>,
     /// for now always y axis
     value_axis: Axis<IntervalTicker, RC>,
-    /// The size of the chart area. Does not include axis labels etc.
-    chart_size: Size,
+    /// The size of the whole chart
+    size: Size,
     /// Histogram trace
-    trace: HistogramTrace,
-    /// The gap between barlines.
-    ///
-    /// Will be clamped to `(0, (bar_width - 5.))`, or `0` if that interval is empty.
-    bar_spacing: f64,
-    bar_color: Color,
+    bars: HistogramTrace,
 }
 
 impl<S, RC: RenderContext> Histogram<S, RC>
@@ -39,37 +32,41 @@ where
     S: Sequence,
     S::Item: fmt::Display,
 {
-    pub fn new(chart_size: Size, labels: impl Into<S>, values: impl Into<Arc<[f64]>>) -> Self {
+    pub fn new(size: Size, labels: impl Into<S>, values: impl Into<Arc<[f64]>>) -> Self {
         let labels = labels.into();
         let values = values.into();
         let values_interval: IntervalTicker = Interval::from_iter(values.iter().copied())
             .include_zero()
             .into();
+        let bars = HistogramTrace::new(values);
         let out = Histogram {
             category_axis: Axis::new(
                 Direction::Right,
                 LabelPosition::After,
-                chart_size.width,
+                size.width,
                 labels.space_around(),
             ),
             value_axis: Axis::new(
                 Direction::Up,
                 LabelPosition::Before,
-                chart_size.height,
+                size.height,
                 values_interval,
             ),
-            chart_size,
-            trace: HistogramTrace::new(chart_size, values),
-            bar_spacing: theme::BAR_SPACING,
-            bar_color: theme::BAR_COLOR,
+            size,
+            bars,
         };
         out
     }
 
     pub fn values(&self) -> &[f64] {
-        self.trace.values()
+        self.bars.values()
     }
 
+    pub fn set_bar_color(&mut self, color: Color) {
+        self.bars.bar_color = color;
+    }
+
+    /*
     /// This function returns the amount of extra space required to draw labels/axes/etc.
     ///
     /// # Panics
@@ -83,6 +80,7 @@ where
             y1: self.category_axis.size().height,
         }
     }
+    */
 
     /// The true size, taking into account labels.
     ///
@@ -90,21 +88,69 @@ where
     ///
     /// This function will panic if `layout` has not been called.
     pub fn size(&self) -> Size {
-        (self.chart_size.to_rect() + self.insets()).size()
+        self.size
     }
 
+    /*
     /// Gets the offset from the top-left of the chart area.
     fn offset(&self) -> Vec2 {
         let insets = self.insets();
         Vec2::new(insets.x0, insets.y0)
     }
+    */
 
     /// Call this to layout text labels etc.
     ///
     /// This function must be called before `draw`, both after creation and after any parameters
     /// change.
+    ///
+    /// The `layout` function is split out from the `draw` function because text layout creation
+    /// can fail. This way, the draw function has no failure paths (providing `layout` gets
+    /// called).
     pub fn layout(&mut self, rc: &mut RC) -> Result<(), piet::Error> {
+        // Loop until our layout fits.
+        // The initial guess is the whole area (we know this will be too big, bug it gives a first
+        // estimate for the axis sizes.
+        let mut chart_size = self.size;
+        // We abuse labelled loops so we can run some code if the for loop finishes before a
+        // solution has been found.
+        'found_height: loop {
+            // We expect this loop to complete after 2 loops.
+            for _ in 0..10 {
+                // Lay out the axes at the current size.
+                self.layout_axes(chart_size, rc)?;
+                // This size contains the space we need for the axes
+                let axis_size = Size {
+                    width: self.value_axis.size().width,
+                    height: self.category_axis.size().height,
+                };
+                if axis_size.height + chart_size.height < self.size.height
+                    && axis_size.width + chart_size.width < self.size.width
+                {
+                    // we've found a valid chart size
+                    break 'found_height;
+                }
+                // Chart size is still too big, try shrinking it to what would have fit with the
+                // current axes, minus a small delta to try to take fp accuracy out of the equation.
+                chart_size.height = self.size.height - axis_size.height - 1e-8;
+                chart_size.width = self.size.width - axis_size.width - 1e-8;
+            }
+            // We didn't find a solution, so warn and just draw as best we can
+            // TODO make a log msg
+            eprintln!("We didn't find a valid chart size, so the chart may overflow");
+            chart_size *= 0.9;
+            self.layout_axes(chart_size, rc)?;
+            break;
+        }
+        self.bars.layout(chart_size, rc)?;
+        Ok(())
+    }
+
+    /// Lays out the axes for a given chart size.
+    fn layout_axes(&mut self, chart_size: Size, rc: &mut RC) -> Result<(), piet::Error> {
+        self.category_axis.set_axis_len(chart_size.width);
         self.category_axis.layout(rc)?;
+        self.value_axis.set_axis_len(chart_size.height);
         self.value_axis.layout(rc)?;
         Ok(())
     }
@@ -112,7 +158,7 @@ where
     /// Helper function to draw the graph somewhere other than (0, 0).
     pub fn draw_at(&self, at: impl Into<Point>, rc: &mut RC) {
         rc.with_save(|rc| {
-            rc.transform(Affine::translate(at.into().to_vec2() + self.offset()));
+            rc.transform(Affine::translate(at.into().to_vec2()));
             self.draw(rc);
             Ok(())
         })
@@ -126,16 +172,26 @@ where
     /// Panics if `layout` was not called.
     pub fn draw(&self, rc: &mut RC) {
         self.draw_grid(rc);
-        self.trace.draw(rc);
-        self.category_axis.draw((0., self.chart_size.height), rc);
-        self.value_axis.draw(Point::ZERO, rc);
+        rc.with_save(|rc| {
+            rc.transform(Affine::translate((self.value_axis.size().width, 0.)));
+            self.bars.draw(rc);
+            rc.with_save(|rc| {
+                rc.transform(Affine::translate((0., self.bars.size().height)));
+                self.category_axis.draw(rc);
+                Ok(())
+            })?;
+            Ok(())
+        })
+        .unwrap();
+        self.value_axis.draw(rc);
     }
 
     /// Draw on the gridlines (only horizontal)
     fn draw_grid(&self, rc: &mut RC) {
+        let width = self.value_axis.size().width;
         for tick in self.value_axis.ticks() {
             rc.stroke(
-                Line::new((0., tick.pos), (self.chart_size.width, tick.pos)),
+                Line::new((width, tick.pos), (self.size.width, tick.pos)),
                 &theme::GRID_COLOR,
                 1.,
             );
@@ -164,7 +220,7 @@ where
 /// How to draw the bars of the histogram.
 pub struct HistogramTrace {
     /// The size of the chart area.
-    pub size: Size,
+    pub size: Option<Size>,
     /// The width of each bar.
     pub bar_width: Option<f64>,
     /// The color to draw the bars.
@@ -187,10 +243,10 @@ impl HistogramTrace {
     /// # Panics
     ///
     /// This function will panic if the lengths of `positions` and `values` are not equal.
-    pub fn new(size: Size, values: impl Into<Arc<[f64]>>) -> Self {
+    pub fn new(values: impl Into<Arc<[f64]>>) -> Self {
         let values = values.into();
         HistogramTrace {
-            size,
+            size: None,
             bar_width: None,
             bar_color: theme::BAR_COLOR,
             values,
@@ -199,10 +255,14 @@ impl HistogramTrace {
         }
     }
 
+    /// Get the numeric values of the bars in this histogram.
     fn values(&self) -> &[f64] {
         &self.values
     }
 
+    /// Specify where you want the bars to be positioned.
+    ///
+    /// Might bin this method.
     pub fn set_positions(&mut self, positions: impl Into<Arc<[f64]>>) {
         let positions = positions.into();
         assert_eq!((&*positions).len(), (&*self.values).len());
@@ -211,37 +271,48 @@ impl HistogramTrace {
 }
 
 impl Trace for HistogramTrace {
-    fn draw<RC: RenderContext>(&self, rc: &mut RC) {
-        let full_value = self
-            .full_value
-            .unwrap_or_else(|| self.values.iter().copied().reduce(f64::max).unwrap_or(1.));
+    fn size(&self) -> Size {
+        self.size.unwrap()
+    }
 
-        // The amount of space to fit each bar in.
-        let bar_gap = self.size.width / self.values.len() as f64;
-
-        let bar_width = self.bar_width.unwrap_or_else(|| {
-            // This function seems to give good results (scale factor chosen by eye)
+    fn layout<RC: RenderContext>(&mut self, size: Size, _rc: &mut RC) -> Result<(), piet::Error> {
+        if self.size == Some(size) {
+            return Ok(());
+        }
+        self.size = Some(size);
+        if self.full_value.is_none() {
+            self.full_value = Some(self.values.iter().copied().reduce(f64::max).unwrap_or(1.));
+        }
+        if self.bar_width.is_none() {
             const SCALE_F: f64 = 0.004;
+            let bar_gap = size.width / self.values.len() as f64;
             let bar_factor = 1. - ((SCALE_F * bar_gap).atan() * FRAC_2_PI);
+            self.bar_width = Some(bar_factor * bar_gap);
+        }
+        if self.positions.is_none() {
+            let gap = size.width / (self.values.len() as f64);
+            self.positions = Some(
+                (0..self.values.len())
+                    .map(move |cnt| gap * (0.5 + cnt as f64))
+                    .collect(),
+            );
+        }
+        Ok(())
+    }
 
-            bar_factor * bar_gap
-        });
+    fn draw<RC: RenderContext>(&self, rc: &mut RC) {
+        let size = self.size.unwrap();
+        let full_value = self.full_value.unwrap();
+        let bar_width = self.bar_width.unwrap();
         let bar_width_2 = bar_width * 0.5;
-
-        let positions = match &self.positions {
-            Some(i) => Either::Left(i.iter().copied()),
-            None => {
-                let gap = self.size.width / (self.values.len() as f64);
-                Either::Right((0..self.values.len()).map(move |cnt| gap * (0.5 + cnt as f64)))
-            }
-        };
+        let positions = self.positions.as_ref().unwrap().iter().copied();
 
         for (&val, pos) in izip!(&*self.values, positions) {
             let bar = Rect {
                 x0: pos - bar_width_2,
-                y0: self.size.height * (1. - val / full_value),
+                y0: size.height * (1. - val / full_value),
                 x1: pos + bar_width_2,
-                y1: self.size.height,
+                y1: size.height,
             };
             rc.fill(bar, &self.bar_color.clone().with_alpha(0.8));
             rc.stroke(bar, &self.bar_color, 2.);

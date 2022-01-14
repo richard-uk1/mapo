@@ -54,8 +54,8 @@ fn draw(rc: &mut Piet) {
     axis.draw((100., HEIGHT as f64 * 0.2), rc);
     */
 
-    let hist_size = Size::new(WIDTH as f64 * 0.6, HEIGHT as f64 * 0.6);
-    let hist_tl = Vec2::new(WIDTH as f64 * 0.2, HEIGHT as f64 * 0.2);
+    let hist_size = Size::new(WIDTH as f64 * 0.95, HEIGHT as f64 * 0.95);
+    let hist_tl = Vec2::new(WIDTH as f64 * 0.025, HEIGHT as f64 * 0.025);
     let mut histogram = Histogram::<Categorical<&'static str>, _>::new(
         hist_size,
         ["first", "second", "third"],

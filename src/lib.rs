@@ -13,6 +13,7 @@ mod ticker;
 pub mod histogram;
 //mod line_chart;
 //mod pie_chart;
+mod chart;
 mod interval;
 mod sequence;
 pub mod theme;
@@ -20,12 +21,12 @@ mod trace;
 
 pub use crate::{
     interval::{Interval, IntervalTicker},
-    sequence::{Categorical, Numeric, Sequence},
+    sequence::{Categorical, Numeric, Sequence, SequenceExt},
     ticker::{Tick, Ticker},
     trace::Trace,
 };
 
-pub type ArcStr = std::sync::Arc<str>;
+type ArcStr = std::sync::Arc<str>;
 /*
     box_plot::{BoxPlot, BoxPlotData, BoxPlotDataLens, BoxPlotDataLensBuilder},
     histogram::{Histogram, HistogramData, HistogramDataLens, HistogramDataLensBuilder},
