@@ -176,7 +176,10 @@ where
             rc.transform(Affine::translate((self.value_axis.size().width, 0.)));
             self.bars.draw(rc);
             rc.with_save(|rc| {
-                rc.transform(Affine::translate((0., self.bars.size().height)));
+                rc.transform(Affine::translate((
+                    0.,
+                    <HistogramTrace as Trace<RC>>::size(&self.bars).height,
+                )));
                 self.category_axis.draw(rc);
                 Ok(())
             })?;
@@ -270,12 +273,12 @@ impl HistogramTrace {
     }
 }
 
-impl Trace for HistogramTrace {
+impl<RC: RenderContext> Trace<RC> for HistogramTrace {
     fn size(&self) -> Size {
         self.size.unwrap()
     }
 
-    fn layout<RC: RenderContext>(&mut self, size: Size, _rc: &mut RC) -> Result<(), piet::Error> {
+    fn layout(&mut self, size: Size, _rc: &mut RC) -> Result<(), piet::Error> {
         if self.size == Some(size) {
             return Ok(());
         }
@@ -300,7 +303,7 @@ impl Trace for HistogramTrace {
         Ok(())
     }
 
-    fn draw<RC: RenderContext>(&self, rc: &mut RC) {
+    fn draw(&self, rc: &mut RC) {
         let size = self.size.unwrap();
         let full_value = self.full_value.unwrap();
         let bar_width = self.bar_width.unwrap();

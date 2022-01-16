@@ -1,9 +1,9 @@
 use piet::{kurbo::Size, RenderContext};
 
 /// A drawing that represents some data. Used inside the chart.
-pub trait Trace {
+pub trait Trace<RC: RenderContext> {
     /// This function can be used to calculate things that depend on the size of the trace.
-    fn layout<RC: RenderContext>(
+    fn layout(
         &mut self,
         #[allow(unused)] size: Size,
         #[allow(unused)] rc: &mut RC,
@@ -20,5 +20,5 @@ pub trait Trace {
     ///
     /// The chart area will start at `(0, 0)` and finish at
     /// `(self.size().width, self.size().height)`.
-    fn draw<RC: RenderContext>(&self, rc: &mut RC);
+    fn draw(&self, rc: &mut RC);
 }

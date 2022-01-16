@@ -15,6 +15,7 @@ pub mod histogram;
 //mod pie_chart;
 mod chart;
 mod interval;
+mod primitives;
 mod sequence;
 pub mod theme;
 mod trace;

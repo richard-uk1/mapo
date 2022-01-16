@@ -13,16 +13,16 @@ pub struct Tick {
 /// Object that implement can take an axis length (in device-independent pixels) and return a set
 /// of marks (a.k.a. ticks) that mark significant points along the axis.
 pub trait Ticker: fmt::Debug {
-    type TickIter: Iterator<Item = Tick>;
-
     /// How many ticks are we going to draw.
     fn len(&self, axis_len: f64) -> usize;
 
-    /// Returns the set of ticks for this scale.
-    fn ticks(&self, axis_len: f64) -> Self::TickIter;
-
     /// Get the `idx`th tick
-    fn get(&self, axis_len: f64, idx: usize) -> Option<Tick> {
-        self.ticks(axis_len).nth(idx)
+    ///
+    /// This should return `Some` if `idx < Ticker::len(self)`, `None` otherwise.
+    fn get(&self, axis_len: f64, idx: usize) -> Option<Tick>;
+
+    fn ticks(&self, axis_len: f64) -> Box<dyn Iterator<Item = Tick> + '_> {
+        let range = 0..Ticker::len(self, axis_len);
+        Box::new(range.map(|idx| Ticker::get(self, axis_len, idx)))
     }
 }
