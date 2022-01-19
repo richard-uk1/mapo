@@ -1,16 +1,13 @@
-use mapo::{
-    axis::{Axis, Direction, LabelPosition},
-    histogram::Histogram,
-    prelude::*,
-    Categorical,
-};
+use fake::{faker::name::raw::FirstName, locales::EN};
+use mapo::histogram::histogram;
 use piet::{
     kurbo::{Affine, Point, Rect, Size, Vec2},
     Color,
 };
 use piet_common::{Device, Piet, RenderContext};
+use rand_distr::{Distribution, Normal};
 
-const WIDTH: usize = 400;
+const WIDTH: usize = 1000;
 const HEIGHT: usize = 600;
 
 fn main() {
@@ -56,15 +53,21 @@ fn draw(rc: &mut Piet) {
 
     let hist_size = Size::new(WIDTH as f64 * 0.95, HEIGHT as f64 * 0.95);
     let hist_tl = Vec2::new(WIDTH as f64 * 0.025, HEIGHT as f64 * 0.025);
-    let mut histogram = Histogram::<Categorical<&'static str>, _>::new(
-        hist_size,
-        ["first", "second", "third"],
-        vec![12., 14., 10.],
-    );
+
+    let normal = Normal::new(10., 8.).unwrap();
+    let rng = &mut rand::thread_rng();
+    let names = fake::vec![String as FirstName(EN); 10];
+    let values: Vec<_> = (0..names.len())
+        .map(|_| {
+            let n: f64 = normal.sample(rng);
+            n.round()
+        })
+        .collect();
+    let mut histogram = histogram(names, values);
 
     rc.with_save(|rc| {
         rc.transform(Affine::translate(hist_tl));
-        histogram.layout(rc).unwrap();
+        histogram.layout(hist_size, rc).unwrap();
         histogram.draw(rc);
         Ok(())
     })

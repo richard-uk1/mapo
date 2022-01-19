@@ -1,97 +1,148 @@
 use crate::{
     axis::{Axis, Direction, LabelPosition},
-    prelude::*,
-    sequence::{Sequence, SpaceAround},
-    theme, Categorical, Interval, IntervalTicker, Ticker, Trace,
+    theme, Ticker, Trace,
 };
-use itertools::izip;
 use piet::{
     kurbo::{Affine, Line, Point, Rect, Size},
     Color, RenderContext,
 };
-use std::{f64::consts::FRAC_2_PI, fmt, sync::Arc};
 
 /// A chart.
 ///
 /// # Type parameters
 ///  - `RC`: the piet render context. This is used to create text layouts.
 pub struct Chart<RC: RenderContext> {
-    // An optional axis above the chart.
+    /// An optional axis above the chart.
     top_axis: Option<Axis<Box<dyn Ticker>, RC>>,
-    // An optional axis below the chart.
+    top_grid: Option<GridStyle>,
+    /// An optional axis below the chart.
     bottom_axis: Option<Axis<Box<dyn Ticker>, RC>>,
-    // An optional axis left of the chart.
+    bottom_grid: Option<GridStyle>,
+    /// An optional axis left of the chart.
     left_axis: Option<Axis<Box<dyn Ticker>, RC>>,
-    // An optional axis right of the chart.
+    left_grid: Option<GridStyle>,
+    /// An optional axis right of the chart.
     right_axis: Option<Axis<Box<dyn Ticker>, RC>>,
+    right_grid: Option<GridStyle>,
     /// Histogram trace
     traces: Vec<Box<dyn Trace<RC>>>,
+
+    // Retained
     /// The size that everything should fit in (inc. axes).
-    size: Size,
+    size: Option<Size>,
+    /// The chart area.
+    ///
+    /// Only valid after call to `layout`.
+    chart_area: Option<Rect>,
 }
 
 impl<RC: RenderContext> Chart<RC> {
-    pub fn new(size: Size) -> Self {
+    pub fn new() -> Self {
         Chart {
             top_axis: None,
+            top_grid: None,
             bottom_axis: None,
+            bottom_grid: None,
             left_axis: None,
+            left_grid: None,
             right_axis: None,
+            right_grid: None,
             traces: vec![],
-            size,
+            size: None,
+            chart_area: None,
         }
     }
 
-    pub fn with_top_axis(self, direction: Direction, ticker: impl Ticker) -> Self {
+    pub fn with_top_axis(mut self, ticker: impl Ticker + 'static) -> Self {
         let axis = Axis::new(
-            direction,
+            Direction::Horizontal,
             LabelPosition::Before,
-            self.size.width,
-            Box::new(ticker),
+            Box::new(ticker) as Box<dyn Ticker>,
         );
         self.top_axis = Some(axis);
         self
     }
 
-    pub fn with_bottom_axis(self, direction: Direction, ticker: impl Ticker) -> Self {
+    pub fn with_top_grid(mut self, style: GridStyle) -> Self {
+        self.top_grid = Some(style);
+        self
+    }
+
+    pub fn set_top_grid(&mut self, style: GridStyle) -> &mut Self {
+        self.top_grid = Some(style);
+        self
+    }
+
+    pub fn with_bottom_axis(mut self, ticker: impl Ticker + 'static) -> Self {
         let axis = Axis::new(
-            direction,
+            Direction::Horizontal,
             LabelPosition::After,
-            self.size.width,
-            Box::new(ticker),
+            Box::new(ticker) as Box<dyn Ticker>,
         );
         self.bottom_axis = Some(axis);
         self
     }
 
-    pub fn with_left_axis(self, direction: Direction, ticker: impl Ticker) -> Self {
+    pub fn with_bottom_grid(mut self, style: GridStyle) -> Self {
+        self.bottom_grid = Some(style);
+        self
+    }
+
+    pub fn set_bottom_grid(&mut self, style: GridStyle) -> &Self {
+        self.bottom_grid = Some(style);
+        self
+    }
+
+    pub fn with_left_axis(mut self, ticker: impl Ticker + 'static) -> Self {
         let axis = Axis::new(
-            direction,
+            Direction::Vertical,
             LabelPosition::Before,
-            self.size.height,
-            Box::new(ticker),
+            Box::new(ticker) as Box<dyn Ticker>,
         );
         self.left_axis = Some(axis);
         self
     }
 
-    pub fn with_right_axis(self, direction: Direction, ticker: impl Ticker) -> Self {
+    pub fn with_left_grid(mut self, style: GridStyle) -> Self {
+        self.left_grid = Some(style);
+        self
+    }
+
+    pub fn set_left_grid(&mut self, style: GridStyle) -> &mut Self {
+        self.left_grid = Some(style);
+        self
+    }
+
+    pub fn with_right_axis(mut self, ticker: impl Ticker + 'static) -> Self {
         let axis = Axis::new(
-            direction,
+            Direction::Vertical,
             LabelPosition::After,
-            self.size.height,
-            Box::new(ticker),
+            Box::new(ticker) as Box<dyn Ticker>,
         );
         self.right_axis = Some(axis);
         self
     }
 
-    pub fn with_trace(self, trace: impl Trace<RC>) -> Self {
-        self.traces.push(trace);
+    pub fn with_right_grid(mut self, style: GridStyle) -> Self {
+        self.right_grid = Some(style);
+        self
     }
 
+    pub fn set_right_grid(&mut self, style: GridStyle) -> &mut Self {
+        self.right_grid = Some(style);
+        self
+    }
+
+    pub fn with_trace(mut self, trace: impl Trace<RC> + 'static) -> Self {
+        self.traces.push(Box::new(trace));
+        self
+    }
+
+    /// # Panics
+    ///
+    /// Will panic if `layout` has not been called.
     pub fn size(&self) -> Size {
-        self.size
+        self.size.unwrap()
     }
 
     /// Lay out the axes and calculate the chart area available.
@@ -99,11 +150,12 @@ impl<RC: RenderContext> Chart<RC> {
     /// Once the chart area has been calculated, each trace will have its `layout` method called.
     ///
     /// This function must be called before `draw`, both after creation and after anything changes.
-    pub fn layout(&mut self, rc: &mut RC) -> Result<(), piet::Error> {
+    pub fn layout(&mut self, size: Size, rc: &mut RC) -> Result<(), piet::Error> {
+        self.size = Some(size);
         // Loop until our layout fits.
         // The initial guess is the whole area (we know this will be too big, bug it gives a first
         // estimate for the axis sizes.
-        let mut chart_size = self.size;
+        let mut chart_size = size;
         // We abuse labelled loops so we can run some code if the for loop finishes before a
         // solution has been found.
         'found_height: loop {
@@ -113,16 +165,16 @@ impl<RC: RenderContext> Chart<RC> {
                 self.layout_axes(chart_size, rc)?;
                 // This size contains the space we need for the axes
                 let axis_size = self.axis_size();
-                if axis_size.height + chart_size.height < self.size.height
-                    && axis_size.width + chart_size.width < self.size.width
+                if axis_size.height + chart_size.height < size.height
+                    && axis_size.width + chart_size.width < size.width
                 {
                     // we've found a valid chart size
                     break 'found_height;
                 }
                 // Chart size is still too big, try shrinking it to what would have fit with the
                 // current axes, minus a small delta to try to take fp accuracy out of the equation.
-                chart_size.height = self.size.height - axis_size.height - 1e-8;
-                chart_size.width = self.size.width - axis_size.width - 1e-8;
+                chart_size.height = size.height - axis_size.height - 1e-8;
+                chart_size.width = size.width - axis_size.width - 1e-8;
             }
             // We didn't find a solution, so warn and just draw as best we can
             // TODO make a log msg
@@ -131,40 +183,64 @@ impl<RC: RenderContext> Chart<RC> {
             self.layout_axes(chart_size, rc)?;
             break;
         }
-        for trace in self.traces {
+
+        let chart_tl = Point::new(
+            self.left_axis
+                .as_ref()
+                .map(|axis| axis.size().width)
+                .unwrap_or(0.),
+            self.top_axis
+                .as_ref()
+                .map(|axis| axis.size().height)
+                .unwrap_or(0.),
+        );
+        self.chart_area = Some(Rect::from_origin_size(chart_tl, chart_size));
+        for trace in &mut self.traces {
             trace.layout(chart_size, rc)?;
         }
+
+        //println!("{:#?}", self.left_axis);
+        //println!("{:#?}", self.bottom_axis);
         Ok(())
     }
 
     /// Lays out the axes for a given chart size.
     fn layout_axes(&mut self, chart_size: Size, rc: &mut RC) -> Result<(), piet::Error> {
         if let Some(axis) = &mut self.top_axis {
-            axis.set_axis_len(chart_size.width);
-            axis.layout(rc)?;
+            axis.layout(chart_size.width, rc)?;
         }
         if let Some(axis) = &mut self.bottom_axis {
-            axis.set_axis_len(chart_size.width);
-            axis.layout(rc)?;
+            axis.layout(chart_size.width, rc)?;
         }
         if let Some(axis) = &mut self.left_axis {
-            axis.set_axis_len(chart_size.height);
-            axis.layout(rc)?;
+            axis.layout(chart_size.height, rc)?;
         }
         if let Some(axis) = &mut self.right_axis {
-            axis.set_axis_len(chart_size.height);
-            axis.layout(rc)?;
+            axis.layout(chart_size.height, rc)?;
         }
         Ok(())
     }
 
     fn axis_size(&self) -> Size {
         Size {
-            width: self.left_axis.map(|axis| axis.size().width).unwrap_or(0.)
-                + self.right_axis.map(|axis| axis.size().width).unwrap_or(0.),
-            height: self.top_axis.map(|axis| axis.size().height).unwrap_or(0.)
+            width: self
+                .left_axis
+                .as_ref()
+                .map(|axis| axis.size().width)
+                .unwrap_or(0.)
+                + self
+                    .right_axis
+                    .as_ref()
+                    .map(|axis| axis.size().width)
+                    .unwrap_or(0.),
+            height: self
+                .top_axis
+                .as_ref()
+                .map(|axis| axis.size().height)
+                .unwrap_or(0.)
                 + self
                     .bottom_axis
+                    .as_ref()
                     .map(|axis| axis.size().height)
                     .unwrap_or(0.),
         }
@@ -176,133 +252,119 @@ impl<RC: RenderContext> Chart<RC> {
     ///
     /// Panics if `layout` was not called.
     pub fn draw(&self, rc: &mut RC) {
-        self.draw_grid(rc);
+        //self.draw_grid(rc);
+        let chart_area = self.chart_area.unwrap();
+
+        // Draw gridlines
+        self.draw_grid(chart_area, rc);
+
+        // draw the chart data first, so the axes are on top
         rc.with_save(|rc| {
-            rc.transform(Affine::translate((self.value_axis.size().width, 0.)));
-            self.bars.draw(rc);
-            rc.with_save(|rc| {
-                rc.transform(Affine::translate((0., self.bars.size().height)));
-                self.category_axis.draw(rc);
-                Ok(())
-            })?;
+            rc.transform(Affine::translate(chart_area.origin().to_vec2()));
+            for trace in &self.traces {
+                trace.draw(rc);
+            }
             Ok(())
         })
         .unwrap();
-        self.value_axis.draw(rc);
+        // now draw axes
+        // top
+        if let Some(axis) = self.top_axis.as_ref() {
+            rc.with_save(|rc| {
+                rc.transform(Affine::translate((chart_area.x0, 0.)));
+                axis.draw(rc);
+                Ok(())
+            })
+            .unwrap();
+        }
+        // bottom
+        if let Some(axis) = self.bottom_axis.as_ref() {
+            rc.with_save(|rc| {
+                rc.transform(Affine::translate((chart_area.x0, chart_area.y1)));
+                axis.draw(rc);
+                Ok(())
+            })
+            .unwrap();
+        }
+        // left
+        if let Some(axis) = self.left_axis.as_ref() {
+            rc.with_save(|rc| {
+                rc.transform(Affine::translate((0., chart_area.y0)));
+                axis.draw(rc);
+                Ok(())
+            })
+            .unwrap();
+        }
+        // right
+        if let Some(axis) = self.right_axis.as_ref() {
+            rc.with_save(|rc| {
+                rc.transform(Affine::translate((chart_area.x1, chart_area.y0)));
+                axis.draw(rc);
+                Ok(())
+            })
+            .unwrap();
+        }
     }
 
-    /// Draw on the gridlines (only horizontal)
-    fn draw_grid(&self, rc: &mut RC) {
-        let width = self.value_axis.size().width;
-        for tick in self.value_axis.ticks() {
-            rc.stroke(
-                Line::new((width, tick.pos), (self.size.width, tick.pos)),
-                &theme::GRID_COLOR,
-                1.,
-            );
+    /// Draw on the gridlines.
+    fn draw_grid(&self, chart_area: Rect, rc: &mut RC) {
+        // left
+        if let (Some(axis), Some(style)) = (&self.left_axis, &self.left_grid) {
+            for tick in axis.ticker().ticks() {
+                let pos = tick.pos + chart_area.y0;
+                rc.stroke(
+                    Line::new((chart_area.x0, pos), (chart_area.x1, pos)),
+                    &style.color,
+                    style.stroke_width,
+                );
+            }
+        }
+        // right
+        if let (Some(axis), Some(style)) = (&self.right_axis, &self.right_grid) {
+            for tick in axis.ticker().ticks() {
+                let pos = tick.pos + chart_area.y0;
+                rc.stroke(
+                    Line::new((chart_area.x0, pos), (chart_area.x1, pos)),
+                    &style.color,
+                    style.stroke_width,
+                );
+            }
+        }
+        // top
+        if let (Some(axis), Some(style)) = (&self.top_axis, &self.top_grid) {
+            for tick in axis.ticker().ticks() {
+                let pos = tick.pos + chart_area.x0;
+                rc.stroke(
+                    Line::new((pos, chart_area.y0), (pos, chart_area.y1)),
+                    &style.color,
+                    style.stroke_width,
+                );
+            }
+        }
+        // bottom
+        if let (Some(axis), Some(style)) = (&self.bottom_axis, &self.bottom_grid) {
+            for tick in axis.ticker().ticks() {
+                let pos = tick.pos + chart_area.x0;
+                rc.stroke(
+                    Line::new((pos, chart_area.y0), (pos, chart_area.y1)),
+                    &style.color,
+                    style.stroke_width,
+                );
+            }
         }
     }
 }
 
-/// How to draw the bars of the histogram.
-pub struct HistogramTrace {
-    /// The size of the chart area.
-    pub size: Option<Size>,
-    /// The width of each bar.
-    pub bar_width: Option<f64>,
-    /// The color to draw the bars.
-    pub bar_color: Color,
-    /// The values of the bars.
-    values: Arc<[f64]>,
-    /// The positions of the center of the bars.
-    ///
-    /// Defaults to evenly spaced bars.
-    positions: Option<Arc<[f64]>>,
-    /// The value that corresponds to the full chart.
-    ///
-    /// Defaults to the maximum of `values`.
-    pub full_value: Option<f64>,
+pub struct GridStyle {
+    pub stroke_width: f64,
+    pub color: Color,
 }
 
-impl HistogramTrace {
-    /// A bar-chart style trace.
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if the lengths of `positions` and `values` are not equal.
-    pub fn new(values: impl Into<Arc<[f64]>>) -> Self {
-        let values = values.into();
-        HistogramTrace {
-            size: None,
-            bar_width: None,
-            bar_color: theme::BAR_COLOR,
-            values,
-            positions: None,
-            full_value: None,
-        }
-    }
-
-    /// Get the numeric values of the bars in this histogram.
-    fn values(&self) -> &[f64] {
-        &self.values
-    }
-
-    /// Specify where you want the bars to be positioned.
-    ///
-    /// Might bin this method.
-    pub fn set_positions(&mut self, positions: impl Into<Arc<[f64]>>) {
-        let positions = positions.into();
-        assert_eq!((&*positions).len(), (&*self.values).len());
-        self.positions = Some(positions.into());
-    }
-}
-
-impl<RC: RenderContext> Trace<RC> for HistogramTrace {
-    fn size(&self) -> Size {
-        self.size.unwrap()
-    }
-
-    fn layout(&mut self, size: Size, _rc: &mut RC) -> Result<(), piet::Error> {
-        if self.size == Some(size) {
-            return Ok(());
-        }
-        self.size = Some(size);
-        if self.full_value.is_none() {
-            self.full_value = Some(self.values.iter().copied().reduce(f64::max).unwrap_or(1.));
-        }
-        if self.bar_width.is_none() {
-            const SCALE_F: f64 = 0.004;
-            let bar_gap = size.width / self.values.len() as f64;
-            let bar_factor = 1. - ((SCALE_F * bar_gap).atan() * FRAC_2_PI);
-            self.bar_width = Some(bar_factor * bar_gap);
-        }
-        if self.positions.is_none() {
-            let gap = size.width / (self.values.len() as f64);
-            self.positions = Some(
-                (0..self.values.len())
-                    .map(move |cnt| gap * (0.5 + cnt as f64))
-                    .collect(),
-            );
-        }
-        Ok(())
-    }
-
-    fn draw(&self, rc: &mut RC) {
-        let size = self.size.unwrap();
-        let full_value = self.full_value.unwrap();
-        let bar_width = self.bar_width.unwrap();
-        let bar_width_2 = bar_width * 0.5;
-        let positions = self.positions.as_ref().unwrap().iter().copied();
-
-        for (&val, pos) in izip!(&*self.values, positions) {
-            let bar = Rect {
-                x0: pos - bar_width_2,
-                y0: size.height * (1. - val / full_value),
-                x1: pos + bar_width_2,
-                y1: size.height,
-            };
-            rc.fill(bar, &self.bar_color.clone().with_alpha(0.8));
-            rc.stroke(bar, &self.bar_color, 2.);
+impl Default for GridStyle {
+    fn default() -> Self {
+        Self {
+            stroke_width: 1.,
+            color: theme::GRID_COLOR,
         }
     }
 }

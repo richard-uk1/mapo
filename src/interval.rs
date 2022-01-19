@@ -1,5 +1,5 @@
 use crate::ticker::{Tick, Ticker};
-use std::{cell::RefCell, fmt};
+use std::fmt;
 
 /// An [interval](https://en.wikipedia.org/wiki/Interval_(mathematics)) of real numbers.
 ///
@@ -106,18 +106,63 @@ impl Interval {
         self.extend_to(0.)
     }
 
-    /// Extends the interval to nice round numbers.
-    pub fn to_rounded(self) -> Self {
-        todo!()
+    /// The middle of the interval
+    pub fn center(self) -> f64 {
+        (self.max + self.min) * 0.5
     }
 
+    /// Extends this interval to be `factor` times the size, scaled about the center of the
+    /// interval.
+    pub fn scale_center(self, factor: f64) -> Self {
+        let center = self.center();
+        let min = (self.min - center) * factor + center;
+        let max = (self.max - center) * factor + center;
+        Interval::new(min, max)
+    }
+
+    /// Extends the interval to nice round numbers.
+    pub fn to_rounded(self) -> Self {
+        // log_10(2)
+        const LOG10_2: f64 = 0.3010299956639812;
+        // log_10(5)
+        const LOG10_5: f64 = 0.6989700043360189;
+
+        let log10size = self.size().log10() - 1.;
+        let mut scale = log10size.floor();
+        let rem = log10size - scale;
+        if rem < LOG10_2 {
+            // scale down to 2 on the previous multiple of 10
+            scale += LOG10_2;
+        } else if rem < LOG10_5 {
+            // scale down to 5 on the previous multiple of 10
+            scale += LOG10_5;
+        } else {
+            scale += 1.
+        }
+        let scale = 10.0f64.powf(scale);
+        let min = self.min.div_euclid(scale) * scale;
+        let max = (self.max + scale).div_euclid(scale) * scale;
+        Interval::new(min, max)
+    }
+
+    /// Get the position between min and max of the given value (0. = min, 1. = max).
+    pub fn t(&self, value: f64) -> f64 {
+        (value - self.min) / (self.max - self.min)
+    }
+
+    pub fn ticker(self) -> IntervalTicker {
+        IntervalTicker::new(self)
+    }
+}
+
+impl FromIterator<f64> for Interval {
     /// Returns the smallest interval that contains all the values in `iter`.
     ///
     /// # Panics
     ///
     /// This function will panic if the iterator is empty, or if any of the values are +∞ or -∞.
     /// NaN values are skipped.
-    pub fn from_iter<I>(iter: I) -> Self
+    fn from_iter<I>(iter: I) -> Self
     where
         I: IntoIterator<Item = f64>,
     {
@@ -132,6 +177,17 @@ impl Interval {
             }
         }
         Interval::new(min, max)
+    }
+}
+
+impl Extend<f64> for Interval {
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = f64>,
+    {
+        for i in iter {
+            *self = self.extend_to(i);
+        }
     }
 }
 
@@ -153,98 +209,80 @@ impl From<std::ops::Range<f64>> for Interval {
     }
 }
 
+// This doesn't return a valid interval, but does behave correctly when extending with an iterator.
+impl Default for Interval {
+    fn default() -> Self {
+        Self {
+            min: f64::INFINITY,
+            max: f64::NEG_INFINITY,
+        }
+    }
+}
+
 /// Wraps `Interval` and retains some calculations required for `impl Ticker`.
 #[derive(Debug)]
 pub struct IntervalTicker {
     interval: Interval,
-    step: RefCell<Option<f64>>,
+    /// Distance between ticks, distinace to first tick, number of ticks (in units being displayed,
+    /// not pixels)
+    step_start_count: Option<(f64, f64, usize)>,
+    /// 1D affine transform from number space to draw space (scale, translate)
+    transform: Option<(f64, f64)>,
 }
 
 impl IntervalTicker {
-    pub fn interval(&self) -> Interval {
-        self.interval
-    }
-
-    pub fn set_interval(&mut self, interval: Interval) {
-        self.interval = interval;
-        *self.step.borrow_mut() = None;
-    }
-
-    /// Calculates and caches the step size.
-    fn step(&self, axis_len: f64) -> f64 {
-        *self.step.borrow_mut().get_or_insert_with(|| {
-            // For now, we are going to assume that the interval is vertical, and that the text
-            // height is 20px. TODO drop the assumptions
-            //
-            // (*3): leave at least same-sized gap above and below label.
-            let max_count = (axis_len / (20. * 3.)) as usize;
-            calc_tick_spacing(self.interval, max_count)
-        })
+    pub fn new(interval: Interval) -> Self {
+        Self {
+            interval,
+            step_start_count: None,
+            transform: None,
+        }
     }
 }
 
 impl From<Interval> for IntervalTicker {
     fn from(interval: Interval) -> Self {
-        IntervalTicker {
-            interval,
-            step: RefCell::new(None),
-        }
+        Self::new(interval)
     }
 }
 
 impl Ticker for IntervalTicker {
-    type TickIter = TickIter;
-
-    fn len(&self, axis_len: f64) -> usize {
-        let step = self.step(axis_len);
+    fn layout(&mut self, axis_len: f64) {
+        // TODO This is a heuristic that should use the size of the font somehow.
+        let max_count = (axis_len / (20. * 3.)) as usize;
+        let step = calc_tick_spacing(self.interval, max_count);
         let start = calc_next_tick(self.interval.min(), step);
-        // Rely on truncating behavior of `as usize`.
-        ((self.interval.max() - start) / step) as usize
+        // Rely on truncating behavior of `as usize`. TODO check the +1 is correct - I think it is
+        // as we count fences but we want fence posts.
+        let count = ((self.interval.max() - start) / step) as usize + 1;
+        self.step_start_count = Some((step, start, count));
+
+        let scale = axis_len / self.interval.size();
+        // The axis always starts at 0, so we just need to remove the start value in value space.
+        let translate = -self.interval.min() * scale;
+        self.transform = Some((scale, translate));
     }
 
-    fn ticks(&self, axis_len: f64) -> Self::TickIter {
-        let step = self.step(axis_len);
-        let start = calc_next_tick(self.interval.min(), step);
-        TickIter {
-            pos: start,
-            step,
-            interval: self.interval,
-            axis_len,
-        }
+    fn len(&self) -> usize {
+        self.step_start_count.expect("layout not called").2
     }
-}
 
-pub struct TickIter {
-    pos: f64,
-    step: f64,
-    interval: Interval,
-    axis_len: f64,
-}
+    fn get(&self, idx: usize) -> Option<Tick> {
+        let (step, start, count) = self.step_start_count.expect("layout not called");
+        let (scale, translate) = self.transform.unwrap();
 
-impl Iterator for TickIter {
-    type Item = Tick;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.pos > self.interval.max() {
+        if idx >= count {
             return None;
         }
-        let next = self.pos;
-        self.pos += self.step;
 
-        let t = (next - self.interval.min()) / self.interval.size();
+        let val = idx as f64 * step + start;
         Some(Tick {
-            pos: self.axis_len * t,
-            label: next.to_string().into(),
+            pos: val * scale + translate,
+            label: val.to_string().into(),
         })
     }
-
-    fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        if self.pos > self.interval.max() {
-            return None;
-        }
-        self.pos += self.step * n as f64;
-        self.next()
-    }
 }
+
 // helpers
 
 /// Returns gap between each scale tick, in terms of the y variable, that gives closest to the
@@ -354,4 +392,11 @@ fn count_ticks_slow(interval: Interval, tick_step: f64) -> usize {
     }
     // correct for overshoot
     tick_count - 1
+}
+
+#[test]
+fn test_interval_extend() {
+    let mut ival: Interval = Default::default();
+    ival.extend([1., 2., 3.]);
+    assert_eq!(ival, Interval::new(1., 3.));
 }

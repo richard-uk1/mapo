@@ -1,6 +1,6 @@
 use crate::ticker::{Tick, Ticker};
 use crate::Interval;
-use std::{fmt, iter, sync::Arc};
+use std::{fmt, sync::Arc};
 
 // /// Because we layout all labels, we should have some cap for when there are so many it will affect
 // /// perf.  The number should be high enough that you couldn't possibly want more.
@@ -21,48 +21,6 @@ pub trait Sequence: fmt::Debug {
 
     /// Returns an iterator over the values.
     fn iter(&self) -> Self::Iter;
-}
-
-impl<S> Ticker for S
-where
-    S: Sequence,
-    S::Item: fmt::Display,
-{
-    type TickIter = SequenceTickIter<S>;
-
-    fn len(&self, _axis_len: f64) -> usize {
-        Sequence::len(self)
-    }
-
-    fn ticks(&self, axis_len: f64) -> Self::TickIter {
-        // gap between labels. We'll get NaN when self.len() == 1, but it doesn't matter
-        // because the iterator will be empty TODO this isn't true.
-        SequenceTickIter {
-            gap: axis_len / (self.len() as f64 - 1.),
-            inner: self.iter().enumerate(),
-        }
-    }
-}
-
-pub struct SequenceTickIter<S: Sequence> {
-    gap: f64,
-    inner: iter::Enumerate<S::Iter>,
-}
-
-impl<S> Iterator for SequenceTickIter<S>
-where
-    S: Sequence,
-    S::Item: fmt::Display,
-{
-    type Item = Tick;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let (idx, v) = self.inner.next()?;
-        Some(Tick {
-            pos: idx as f64 * self.gap,
-            label: v.to_string().into(),
-        })
-    }
 }
 
 /// A numeric sequence
@@ -257,69 +215,140 @@ impl<T: Copy, const N: usize> From<[T; N]> for Categorical<T> {
 }
 
 /// Extension methods for `Sequence`.
-pub trait SequenceExt: Sequence {
+pub trait SequenceExt: Sequence
+where
+    Self::Item: fmt::Display,
+{
+    fn space_between_ticker(self) -> SpaceBetweenTicker<Self>
+    where
+        Self: Sized;
     /// Use when you want flex 'space-around' behavior (as opposed to 'space-bewteen' - the
     /// default).
-    fn space_around(self) -> SpaceAround<Self>
+    fn space_around_ticker(self) -> SpaceAroundTicker<Self>
     where
         Self: Sized;
 }
 
-impl<S: Sequence> SequenceExt for S {
-    fn space_around(self) -> SpaceAround<Self> {
-        SpaceAround(self)
+impl<S: Sequence> SequenceExt for S
+where
+    S::Item: fmt::Display,
+{
+    fn space_between_ticker(self) -> SpaceBetweenTicker<Self> {
+        SpaceBetweenTicker::new(self)
+    }
+    fn space_around_ticker(self) -> SpaceAroundTicker<Self> {
+        SpaceAroundTicker::new(self)
     }
 }
 
 #[derive(Debug)]
-pub struct SpaceAround<S>(S);
-
-impl<S> std::ops::Deref for SpaceAround<S> {
-    type Target = S;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+pub struct SpaceAroundTicker<S> {
+    sequence: S,
+    gap: Option<f64>,
 }
 
-impl<S> Ticker for SpaceAround<S>
+impl<S> SpaceAroundTicker<S>
 where
     S: Sequence,
-    S::Item: fmt::Display,
 {
-    type TickIter = SpaceAroundTickIter<S>;
-
-    fn len(&self, _axis_len: f64) -> usize {
-        self.0.len()
-    }
-
-    fn ticks(&self, axis_len: f64) -> Self::TickIter {
-        // gap between labels. We'll get NaN when self.len() == 0, but it doesn't matter
-        // because the iterator will be empty
-        SpaceAroundTickIter {
-            gap: axis_len / self.0.len() as f64,
-            inner: self.0.iter().enumerate(),
+    pub fn new(sequence: S) -> Self {
+        Self {
+            sequence,
+            gap: None,
         }
     }
 }
 
-// We have to do this because we have to name the type (until type_alias_impl_trait lands)
-pub struct SpaceAroundTickIter<S: Sequence> {
-    gap: f64,
-    inner: iter::Enumerate<S::Iter>,
+impl<S> std::ops::Deref for SpaceAroundTicker<S> {
+    type Target = S;
+    fn deref(&self) -> &Self::Target {
+        &self.sequence
+    }
 }
 
-impl<S> Iterator for SpaceAroundTickIter<S>
+impl<S> Ticker for SpaceAroundTicker<S>
 where
     S: Sequence,
     S::Item: fmt::Display,
 {
-    type Item = Tick;
+    fn layout(&mut self, axis_len: f64) {
+        self.gap = Some(axis_len / self.sequence.len() as f64);
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        let (idx, v) = self.inner.next()?;
+    fn len(&self) -> usize {
+        self.sequence.len()
+    }
+
+    fn get(&self, idx: usize) -> Option<Tick> {
+        let itm = self.sequence.get(idx)?;
         Some(Tick {
-            pos: (idx as f64 + 0.5) * self.gap,
-            label: v.to_string().into(),
+            pos: (idx as f64 + 0.5) * self.gap.unwrap(),
+            label: itm.to_string().into(),
         })
+    }
+
+    fn ticks(&self) -> Box<dyn Iterator<Item = Tick> + '_> {
+        // gap between labels. We'll get NaN when self.len() == 0, but it doesn't matter
+        // because the iterator will be empty
+        Box::new(self.sequence.iter().enumerate().map(move |(idx, v)| Tick {
+            pos: (idx as f64 + 0.5) * self.gap.unwrap(),
+            label: v.to_string().into(),
+        }))
+    }
+}
+
+#[derive(Debug)]
+pub struct SpaceBetweenTicker<S> {
+    sequence: S,
+    gap: Option<f64>,
+}
+
+impl<S> SpaceBetweenTicker<S>
+where
+    S: Sequence,
+{
+    pub fn new(sequence: S) -> Self {
+        Self {
+            sequence,
+            gap: None,
+        }
+    }
+}
+
+impl<S> std::ops::Deref for SpaceBetweenTicker<S> {
+    type Target = S;
+    fn deref(&self) -> &Self::Target {
+        &self.sequence
+    }
+}
+
+impl<S> Ticker for SpaceBetweenTicker<S>
+where
+    S: Sequence,
+    S::Item: fmt::Display,
+{
+    fn layout(&mut self, axis_len: f64) {
+        self.gap = Some(axis_len / (self.sequence.len() - 1).max(1) as f64);
+    }
+
+    fn len(&self) -> usize {
+        self.sequence.len()
+    }
+
+    fn get(&self, idx: usize) -> Option<Tick> {
+        let itm = self.sequence.get(idx)?;
+        Some(Tick {
+            pos: (idx as f64) * self.gap.unwrap(),
+            label: itm.to_string().into(),
+        })
+    }
+
+    fn ticks(&self) -> Box<dyn Iterator<Item = Tick> + '_> {
+        // gap between labels. We'll get NaN when self.len() == 0, but it doesn't matter
+        // because the iterator will be empty
+        Box::new(self.sequence.iter().enumerate().map(move |(idx, v)| Tick {
+            pos: (idx as f64) * self.gap.unwrap(),
+            label: v.to_string().into(),
+        }))
     }
 }
