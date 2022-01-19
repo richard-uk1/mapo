@@ -18,7 +18,7 @@ where
     let values_interval = Interval::from_iter(values.iter().copied())
         .include_zero()
         .to_rounded();
-    let bars_trace = HistogramTrace::new(values).with_y_max(values_interval.max());
+    let bars_trace = HistogramTrace::new(values).with_y_range(values_interval);
     Chart::new()
         .with_left_axis(values_interval.ticker().reverse())
         .with_left_grid(GridStyle::default())
@@ -31,13 +31,7 @@ where
     RC: RenderContext,
     L: fmt::Display + fmt::Debug + Clone + 'static,
 {
-    let data = data.into_iter();
-    let mut labels = Vec::with_capacity(data.size_hint().0);
-    let mut values = Vec::with_capacity(data.size_hint().0);
-    for (label, value) in data {
-        labels.push(label);
-        values.push(value);
-    }
+    let (labels, values): (Vec<L>, Vec<f64>) = data.into_iter().unzip();
     histogram(labels, values)
 }
 
@@ -47,14 +41,14 @@ pub struct HistogramTrace {
     ///
     /// Not public because we have retained state that depends on them.
     values: Arc<[f64]>,
-    /// The maximum value to use for y
-    ///
-    /// The maximum value in `values` would be a sensible choice.
-    y_max: Option<f64>,
     /// The width of each bar.
     pub bar_width: Option<f64>,
     /// The color to draw the bars.
     pub bar_color: Color,
+    /// The maximum value to use for y
+    ///
+    /// The maximum value in `values` would be a sensible choice.
+    y_range: Option<Interval>,
 
     // Retained
     /// The size of the chart area.
@@ -63,10 +57,6 @@ pub struct HistogramTrace {
     ///
     /// Defaults to evenly spaced bars.
     positions: Option<Arc<[f64]>>,
-    /// The value that corresponds to the full chart.
-    ///
-    /// Defaults to the maximum of `values`.
-    pub full_value: Option<f64>,
 }
 
 impl HistogramTrace {
@@ -81,18 +71,17 @@ impl HistogramTrace {
             bar_width: None,
             bar_color: theme::BAR_COLOR,
             values,
-            y_max: None,
+            y_range: None,
             size: None,
             positions: None,
-            full_value: None,
         }
     }
 
     /// Sets the maximum value of the y axis.
     ///
     /// Defaults to the largest value in `values`.
-    pub fn with_y_max(mut self, y_max: f64) -> Self {
-        self.y_max = Some(y_max);
+    pub fn with_y_range(mut self, y_range: Interval) -> Self {
+        self.y_range = Some(y_range);
         self
     }
 
@@ -121,8 +110,14 @@ impl<RC: RenderContext> Trace<RC> for HistogramTrace {
             return Ok(());
         }
         self.size = Some(size);
-        if self.full_value.is_none() {
-            self.full_value = Some(self.values.iter().copied().reduce(f64::max).unwrap_or(1.));
+        if self.y_range.is_none() {
+            self.y_range = Some(
+                self.values
+                    .iter()
+                    .copied()
+                    .collect::<Interval>()
+                    .extend_to(0.),
+            );
         }
         if self.bar_width.is_none() {
             const SCALE_F: f64 = 0.004;
@@ -143,17 +138,18 @@ impl<RC: RenderContext> Trace<RC> for HistogramTrace {
 
     fn draw(&self, rc: &mut RC) {
         let size = self.size.unwrap();
-        let full_value = self.y_max.unwrap_or(self.full_value.unwrap());
+        let y_range = self.y_range.unwrap();
         let bar_width = self.bar_width.unwrap();
         let bar_width_2 = bar_width * 0.5;
         let positions = self.positions.as_ref().unwrap().iter().copied();
 
+        let zero = size.height * (1. - y_range.t(0.));
         for (&val, pos) in izip!(&*self.values, positions) {
             let bar = Rect {
                 x0: pos - bar_width_2,
-                y0: size.height * (1. - val / full_value),
+                y0: size.height * (1. - y_range.t(val)),
                 x1: pos + bar_width_2,
-                y1: size.height,
+                y1: zero,
             };
             rc.fill(bar, &self.bar_color.clone().with_alpha(0.8));
             rc.stroke(bar, &self.bar_color, 2.);

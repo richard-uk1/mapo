@@ -60,7 +60,7 @@ fn draw(rc: &mut Piet) {
     let values: Vec<_> = (0..names.len())
         .map(|_| {
             let n: f64 = normal.sample(rng);
-            n.round()
+            n.round().abs()
         })
         .collect();
     let mut histogram = histogram(names, values);

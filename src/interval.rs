@@ -19,6 +19,11 @@ impl fmt::Debug for Interval {
 }
 
 impl Interval {
+    const INVALID: Self = Self {
+        min: f64::INFINITY,
+        max: f64::NEG_INFINITY,
+    };
+
     /// Construct a interval from its min and max
     ///
     /// # Panics
@@ -33,7 +38,18 @@ impl Interval {
             min,
             max
         );
-        Interval { min, max }
+        let interval = Interval { min, max };
+        if !interval.is_valid() {
+            panic!("invalid interval: -∞ < {} < {} < ∞", min, max);
+        }
+        interval
+    }
+
+    /// Whether this interval is valid.
+    ///
+    /// An interval created with `new` will panic if invalid.
+    pub fn is_valid(self) -> bool {
+        self.min.is_finite() && self.max.is_finite() && self.min < self.max
     }
 
     /// Get the `(lower bound, upper bound)` a.k.a. `(min, max)` of the interval.
@@ -166,17 +182,9 @@ impl FromIterator<f64> for Interval {
     where
         I: IntoIterator<Item = f64>,
     {
-        let mut min = f64::INFINITY;
-        let mut max = f64::NEG_INFINITY;
-        for v in iter {
-            if v < min {
-                min = v;
-            }
-            if v > max {
-                max = v;
-            }
-        }
-        Interval::new(min, max)
+        let mut ival = Self::default();
+        ival.extend(iter.into_iter());
+        ival
     }
 }
 
@@ -212,10 +220,7 @@ impl From<std::ops::Range<f64>> for Interval {
 // This doesn't return a valid interval, but does behave correctly when extending with an iterator.
 impl Default for Interval {
     fn default() -> Self {
-        Self {
-            min: f64::INFINITY,
-            max: f64::NEG_INFINITY,
-        }
+        Self::INVALID
     }
 }
 
