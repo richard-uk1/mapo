@@ -75,7 +75,8 @@ impl<RC: RenderContext> Trace<RC> for ScatterTrace {
         let size = self.size.unwrap();
         for (x, y) in self.values.iter().copied() {
             let pos_x = self.x_range.t(x) * size.width;
-            let pos_y = self.y_range.t(y) * size.height;
+            // The y position is reversed (because we want 0 at the bottom, not the top)
+            let pos_y = (1. - self.y_range.t(y)) * size.height;
             let dot = Circle::new((pos_x, pos_y), 2.);
             rc.fill(dot, &self.point_color);
         }
