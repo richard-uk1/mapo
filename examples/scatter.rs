@@ -34,7 +34,7 @@ fn draw(rc: &mut Piet) {
 
     let normal = Normal::new(10., 8.).unwrap();
     let rng = &mut rand::thread_rng();
-    let values: Vec<_> = (0..10_000)
+    let values: Vec<_> = (0..4)
         .map(|_| (normal.sample(rng), normal.sample(rng)))
         .collect();
     let mut chart = scatter(values);

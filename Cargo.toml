@@ -11,14 +11,13 @@ license = "MIT/Apache-2.0"
 [dependencies]
 itertools = "0.9.0"
 to_precision = "0.1.1"
-#piet = { path = "../../contrib/piet/piet" }
-piet = { git = "https://github.com/linebender/piet" }
+piet = "0.5.0"
 
 [dev-dependencies]
+druid-shell = { git = "https://github.com/linebender/druid", rev = "45567785" }
 anyhow = "1.0.28"
 csv = "1.1.3"
 fake = "2.4.3"
-#piet-common = { path = "../../contrib/piet/piet-common", features = ["png"] }
-piet-common = { git = "https://github.com/linebender/piet", features = ["png"] }
 rand = "0.8.4"
 rand_distr = "0.4.3"
+piet-common = "0.5.0"
