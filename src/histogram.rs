@@ -1,15 +1,12 @@
-use crate::{prelude::*, theme, Categorical, Chart, GridStyle, Interval, IntervalTicker, Trace};
+use crate::{prelude::*, theme, Categorical, Chart, GridStyle, Interval, Trace};
 use itertools::izip;
-use piet::{
+use piet_common::{
     kurbo::{Rect, Size},
-    Color, RenderContext,
+    Color, Error as PietError, Piet, RenderContext,
 };
-use std::{f64::consts::FRAC_2_PI, fmt, sync::Arc};
+use std::{any::Any, f64::consts::FRAC_2_PI, fmt, sync::Arc};
 
-pub fn histogram<L, RC: RenderContext>(
-    labels: impl Into<Categorical<L>>,
-    values: impl Into<Arc<[f64]>>,
-) -> Chart<RC>
+pub fn histogram<L>(labels: impl Into<Categorical<L>>, values: impl Into<Arc<[f64]>>) -> Chart
 where
     L: Clone + fmt::Debug + fmt::Display + 'static,
 {
@@ -26,9 +23,8 @@ where
         .with_trace(bars_trace)
 }
 /// Create a histogram from `(label, frequency)` pairs.
-pub fn histogram_from_pairs<L, RC>(data: impl IntoIterator<Item = (L, f64)>) -> Chart<RC>
+pub fn histogram_from_pairs<L>(data: impl IntoIterator<Item = (L, f64)>) -> Chart
 where
-    RC: RenderContext,
     L: fmt::Display + fmt::Debug + Clone + 'static,
 {
     let (labels, values): (Vec<L>, Vec<f64>) = data.into_iter().unzip();
@@ -96,16 +92,16 @@ impl HistogramTrace {
     pub fn set_positions(&mut self, positions: impl Into<Arc<[f64]>>) {
         let positions = positions.into();
         assert_eq!((&*positions).len(), (&*self.values).len());
-        self.positions = Some(positions.into());
+        self.positions = Some(positions);
     }
 }
 
-impl<RC: RenderContext> Trace<RC> for HistogramTrace {
+impl Trace for HistogramTrace {
     fn size(&self) -> Size {
         self.size.unwrap()
     }
 
-    fn layout(&mut self, size: Size, _rc: &mut RC) -> Result<(), piet::Error> {
+    fn layout(&mut self, size: Size, _rc: &mut Piet) -> Result<(), PietError> {
         if self.size == Some(size) {
             return Ok(());
         }
@@ -136,7 +132,7 @@ impl<RC: RenderContext> Trace<RC> for HistogramTrace {
         Ok(())
     }
 
-    fn draw(&self, rc: &mut RC) {
+    fn draw(&self, rc: &mut Piet) {
         let size = self.size.unwrap();
         let y_range = self.y_range.unwrap();
         let bar_width = self.bar_width.unwrap();
@@ -154,5 +150,9 @@ impl<RC: RenderContext> Trace<RC> for HistogramTrace {
             rc.fill(bar, &self.bar_color.clone().with_alpha(0.8));
             rc.stroke(bar, &self.bar_color, 2.);
         }
+    }
+
+    fn as_any(&mut self) -> &mut dyn Any {
+        self
     }
 }

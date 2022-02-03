@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc};
+use std::{any::Any, fmt, sync::Arc};
 
 /// A position on an axis that we can mark and label.
 #[derive(Debug, Clone)]
@@ -20,6 +20,10 @@ pub trait Ticker: fmt::Debug {
     /// How many ticks are we going to draw.
     fn len(&self) -> usize;
 
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// An iterator over the ticks that should be drawn, with their position on the axis.
     fn ticks(&self) -> Box<dyn Iterator<Item = Tick> + '_> {
         Box::new((0..self.len()).map(|idx| self.get(idx).unwrap()))
@@ -29,6 +33,10 @@ pub trait Ticker: fmt::Debug {
     ///
     /// This should return `Some` if `idx < Ticker::len(self)`, `None` otherwise.
     fn get(&self, idx: usize) -> Option<Tick>;
+
+    fn as_any(&self) -> &dyn Any
+    where
+        Self: 'static;
 }
 
 pub trait TickerExt: Ticker {
@@ -61,6 +69,10 @@ impl Ticker for Box<dyn Ticker> {
     fn get(&self, idx: usize) -> Option<Tick> {
         (**self).get(idx)
     }
+
+    fn as_any(&self) -> &dyn Any {
+        (**self).as_any()
+    }
 }
 
 #[derive(Debug)]
@@ -89,5 +101,12 @@ impl<T: Ticker> Ticker for ReverseTicker<T> {
             label: tick.label,
             pos: self.axis_len.expect("format not called") - tick.pos,
         })
+    }
+
+    fn as_any(&self) -> &dyn Any
+    where
+        T: 'static,
+    {
+        self
     }
 }

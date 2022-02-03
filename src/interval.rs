@@ -1,5 +1,5 @@
 use crate::ticker::{Tick, Ticker};
-use std::fmt;
+use std::{any::Any, f64::consts::LOG10_2, fmt};
 
 /// An [interval](https://en.wikipedia.org/wiki/Interval_(mathematics)) of real numbers.
 ///
@@ -138,8 +138,7 @@ impl Interval {
 
     /// Extends the interval to nice round numbers.
     pub fn to_rounded(self) -> Self {
-        // log_10(2)
-        const LOG10_2: f64 = 0.3010299956639812;
+        // log_10(2) (from libstd)
         // log_10(5)
         const LOG10_5: f64 = 0.6989700043360189;
 
@@ -285,6 +284,10 @@ impl Ticker for IntervalTicker {
             pos: val * scale + translate,
             label: val.to_string().into(),
         })
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

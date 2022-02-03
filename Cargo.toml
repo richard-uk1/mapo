@@ -11,7 +11,7 @@ license = "MIT/Apache-2.0"
 [dependencies]
 itertools = "0.9.0"
 to_precision = "0.1.1"
-piet = "0.5.0"
+piet-common = "0.5.0"
 
 [dev-dependencies]
 druid-shell = { git = "https://github.com/linebender/druid", rev = "45567785" }
@@ -21,3 +21,5 @@ fake = "2.4.3"
 rand = "0.8.4"
 rand_distr = "0.4.3"
 piet-common = "0.5.0"
+qu = "0.4.2"
+clap = "3.0.14"

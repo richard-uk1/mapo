@@ -1,4 +1,4 @@
-use piet::Color;
+use piet_common::Color;
 
 /// Used in a number of places to give small spacing.
 pub const LABEL_FONT_SIZE: f64 = 8.;

@@ -1,11 +1,9 @@
 // TODO implement toPrecision from javascript - it gives better results.
-use crate::{
-    theme,
-    ticker::{Tick, Ticker},
-};
-use piet::{
+use crate::{theme, ticker::Ticker};
+use piet_common::{
     kurbo::{Line, Point, Rect, Size},
-    Color, RenderContext, Text, TextAttribute, TextLayout, TextLayoutBuilder,
+    Color, Error as PietError, Piet, PietTextLayout, RenderContext, Text, TextAttribute,
+    TextLayout, TextLayoutBuilder,
 };
 use std::{fmt, ops::Deref};
 
@@ -46,7 +44,7 @@ pub enum Direction {
 /// [matplotlib ticker](https://github.com/matplotlib/matplotlib/blob/master/lib/matplotlib/ticker.py#L2057)
 /// is a good resource.
 #[derive(Clone)]
-pub struct Axis<T, RC: RenderContext> {
+pub struct Axis<T> {
     /// Whether the axis is vertical or horizontal.
     direction: Direction,
     /// Where the labels should be shown. Ticks will be drawn on the opposite side.
@@ -68,12 +66,12 @@ pub struct Axis<T, RC: RenderContext> {
     /// This is cached, and invalidated by clearing the vec. This way we
     /// can re-use the allocation. To see if cache is valid, check its
     /// length against `ticker.len()`.
-    label_layouts: Vec<Label<RC>>,
+    label_layouts: Vec<Label>,
     /// Which of the layouts we are actually going to draw.
     labels_to_draw: Vec<usize>,
 }
 
-impl<T: fmt::Debug, RC: RenderContext> fmt::Debug for Axis<T, RC> {
+impl<T: fmt::Debug> fmt::Debug for Axis<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Axis")
             .field("direction", &self.direction)
@@ -87,7 +85,7 @@ impl<T: fmt::Debug, RC: RenderContext> fmt::Debug for Axis<T, RC> {
     }
 }
 
-impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
+impl<T: Ticker> Axis<T> {
     /// Create a new axis.
     pub fn new(direction: Direction, label_pos: LabelPosition, ticker: T) -> Self {
         Self {
@@ -136,7 +134,7 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
     }
 
     /// Call this before draw.
-    pub fn layout(&mut self, axis_len: f64, rc: &mut RC) -> Result<(), piet::Error> {
+    pub fn layout(&mut self, axis_len: f64, rc: &mut Piet) -> Result<(), PietError> {
         self.is_layout_valid = true;
         self.axis_len = axis_len;
         self.ticker.layout(axis_len);
@@ -146,7 +144,7 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
     }
 
     /// Draw the layout
-    pub fn draw(&self, rc: &mut RC) {
+    pub fn draw(&self, rc: &mut Piet) {
         let Size { width, height } = self.size();
 
         // ticks
@@ -191,7 +189,7 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
         }
     }
 
-    fn build_label_layouts(&mut self, rc: &mut RC) -> Result<(), piet::Error> {
+    fn build_label_layouts(&mut self, rc: &mut Piet) -> Result<(), PietError> {
         self.assert_layout();
         self.label_layouts.clear();
 
@@ -282,7 +280,7 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
     }
 
     /// Iterate over only those labels we will be drawing.
-    fn labels_to_draw<'a>(&'a self) -> impl Iterator<Item = &'a Label<RC>> {
+    fn labels_to_draw(&self) -> impl Iterator<Item = &'_ Label> {
         self.labels_to_draw
             .iter()
             .copied()
@@ -326,25 +324,25 @@ impl<T: Ticker, RC: RenderContext> Axis<T, RC> {
 
 /// The label's text layout with position information
 #[derive(Clone)]
-struct Label<RC: RenderContext> {
+struct Label {
     pos: Point,
-    layout: <RC as RenderContext>::TextLayout,
+    layout: PietTextLayout,
 }
 
-impl<RC: RenderContext> Label<RC> {
+impl Label {
     pub fn rect(&self) -> Rect {
         Rect::from_origin_size(self.pos, self.layout.size())
     }
 }
 
-impl<RC: RenderContext> Deref for Label<RC> {
-    type Target = <RC as RenderContext>::TextLayout;
+impl Deref for Label {
+    type Target = PietTextLayout;
     fn deref(&self) -> &Self::Target {
         &self.layout
     }
 }
 
-impl<RC: RenderContext> fmt::Debug for Label<RC> {
+impl fmt::Debug for Label {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Label")
             .field("text", &self.layout.text())

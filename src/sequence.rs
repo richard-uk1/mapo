@@ -1,6 +1,6 @@
 use crate::ticker::{Tick, Ticker};
 use crate::Interval;
-use std::{fmt, sync::Arc};
+use std::{any::Any, fmt, sync::Arc};
 
 // /// Because we layout all labels, we should have some cap for when there are so many it will affect
 // /// perf.  The number should be high enough that you couldn't possibly want more.
@@ -295,6 +295,13 @@ where
             label: v.to_string().into(),
         }))
     }
+
+    fn as_any(&self) -> &dyn Any
+    where
+        Self: 'static,
+    {
+        self
+    }
 }
 
 #[derive(Debug)]
@@ -350,5 +357,12 @@ where
             pos: (idx as f64) * self.gap.unwrap(),
             label: v.to_string().into(),
         }))
+    }
+
+    fn as_any(&self) -> &dyn Any
+    where
+        Self: 'static,
+    {
+        self
     }
 }

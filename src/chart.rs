@@ -2,30 +2,31 @@ use crate::{
     axis::{Axis, Direction, LabelPosition},
     theme, Ticker, Trace,
 };
-use piet::{
+use piet_common::{
     kurbo::{Affine, Line, Point, Rect, Size},
-    Color, RenderContext,
+    Color, Error as PietError, Piet, RenderContext,
 };
+use std::any::Any;
 
 /// A chart.
 ///
 /// # Type parameters
 ///  - `RC`: the piet render context. This is used to create text layouts.
-pub struct Chart<RC: RenderContext> {
+pub struct Chart {
     /// An optional axis above the chart.
-    top_axis: Option<Axis<Box<dyn Ticker>, RC>>,
+    top_axis: Option<Axis<Box<dyn Ticker>>>,
     top_grid: Option<GridStyle>,
     /// An optional axis below the chart.
-    bottom_axis: Option<Axis<Box<dyn Ticker>, RC>>,
+    bottom_axis: Option<Axis<Box<dyn Ticker>>>,
     bottom_grid: Option<GridStyle>,
     /// An optional axis left of the chart.
-    left_axis: Option<Axis<Box<dyn Ticker>, RC>>,
+    left_axis: Option<Axis<Box<dyn Ticker>>>,
     left_grid: Option<GridStyle>,
     /// An optional axis right of the chart.
-    right_axis: Option<Axis<Box<dyn Ticker>, RC>>,
+    right_axis: Option<Axis<Box<dyn Ticker>>>,
     right_grid: Option<GridStyle>,
     /// Histogram trace
-    traces: Vec<Box<dyn Trace<RC>>>,
+    traces: Vec<Box<dyn Trace>>,
 
     // Retained
     /// The size that everything should fit in (inc. axes).
@@ -36,7 +37,7 @@ pub struct Chart<RC: RenderContext> {
     chart_area: Option<Rect>,
 }
 
-impl<RC: RenderContext> Chart<RC> {
+impl Chart {
     pub fn new() -> Self {
         Chart {
             top_axis: None,
@@ -133,9 +134,15 @@ impl<RC: RenderContext> Chart<RC> {
         self
     }
 
-    pub fn with_trace(mut self, trace: impl Trace<RC> + 'static) -> Self {
+    pub fn with_trace(mut self, trace: impl Trace + 'static) -> Self {
         self.traces.push(Box::new(trace));
         self
+    }
+
+    pub fn traces_mut<T: Trace>(&mut self) -> impl Iterator<Item = &mut T> {
+        self.traces
+            .iter_mut()
+            .filter_map(|trace| trace.as_any().downcast_mut())
     }
 
     /// # Panics
@@ -150,7 +157,7 @@ impl<RC: RenderContext> Chart<RC> {
     /// Once the chart area has been calculated, each trace will have its `layout` method called.
     ///
     /// This function must be called before `draw`, both after creation and after anything changes.
-    pub fn layout(&mut self, size: Size, rc: &mut RC) -> Result<(), piet::Error> {
+    pub fn layout(&mut self, size: Size, rc: &mut Piet) -> Result<(), PietError> {
         self.size = Some(size);
         // Loop until our layout fits.
         // The initial guess is the whole area (we know this will be too big, bug it gives a first
@@ -205,7 +212,7 @@ impl<RC: RenderContext> Chart<RC> {
     }
 
     /// Lays out the axes for a given chart size.
-    fn layout_axes(&mut self, chart_size: Size, rc: &mut RC) -> Result<(), piet::Error> {
+    fn layout_axes(&mut self, chart_size: Size, rc: &mut Piet) -> Result<(), PietError> {
         if let Some(axis) = &mut self.top_axis {
             axis.layout(chart_size.width, rc)?;
         }
@@ -251,7 +258,7 @@ impl<RC: RenderContext> Chart<RC> {
     /// # Panics
     ///
     /// Panics if `layout` was not called.
-    pub fn draw(&self, rc: &mut RC) {
+    pub fn draw(&self, rc: &mut Piet) {
         //self.draw_grid(rc);
         let chart_area = self.chart_area.unwrap();
 
@@ -307,7 +314,7 @@ impl<RC: RenderContext> Chart<RC> {
     }
 
     /// Draw on the gridlines.
-    fn draw_grid(&self, chart_area: Rect, rc: &mut RC) {
+    fn draw_grid(&self, chart_area: Rect, rc: &mut Piet) {
         // left
         if let (Some(axis), Some(style)) = (&self.left_axis, &self.left_grid) {
             for tick in axis.ticker().ticks() {
@@ -352,6 +359,12 @@ impl<RC: RenderContext> Chart<RC> {
                 );
             }
         }
+    }
+}
+
+impl Default for Chart {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
